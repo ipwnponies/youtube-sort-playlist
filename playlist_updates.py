@@ -48,6 +48,11 @@ YOUTUBE_API_VERSION = 'v3'
 
 
 def get_watchlater_playlist(youtube):
+    '''Get the id of the 'Watch Later' playlist.
+
+    The 'Watch Later' playlist is regular playlist and is not the same as the magical one that all
+    youtube users have by default.
+    '''
     playlists = youtube.playlists().list(part='snippet', mine=True).execute()
     for playlist in playlists['items']:
         if playlist['snippet']['title'] == 'Watch Later':
@@ -55,7 +60,7 @@ def get_watchlater_playlist(youtube):
 
 
 def get_playlist_videos(youtube, watchlater_id):
-    '''Returns list of tuples containing the video id and position in Watch Later playlist'''
+    '''Returns list of playlistItems from Watch Later playlist'''
     result = []
 
     request = youtube.playlistItems().list(
@@ -76,7 +81,7 @@ def get_playlist_videos(youtube, watchlater_id):
 
 
 def get_channel(youtube, videos):
-    '''Takes a list of video ids and returns the channel information'''
+    '''Returns a dict where video id and channelId are the key-value pairs.'''
     result = {}
 
     # Partition videos due to max number of videos queryable with one api call
@@ -101,6 +106,7 @@ def get_channel(youtube, videos):
 
 
 def sort_playlist(youtube, playlist_videos):
+    '''Sorts a playlist and groups videos by channel.'''
     video_ids = [i['snippet']['resourceId']['videoId']
                  for i in playlist_videos]
     channel_map = get_channel(youtube, video_ids)
@@ -145,6 +151,7 @@ def get_youtube():
 
 
 def main():
+    '''Execute the main script to sort Watch Later playlist.'''
     youtube = get_youtube()
     watchlater_id = get_watchlater_playlist(youtube)
     if not watchlater_id:
