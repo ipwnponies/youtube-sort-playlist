@@ -47,6 +47,13 @@ YOUTUBE_API_SERVICE_NAME = 'youtube'
 YOUTUBE_API_VERSION = 'v3'
 
 
+def get_watchlater_playlist(youtube):
+    playlists = youtube.playlists().list(part='snippet', mine=True).execute()
+    for playlist in playlists['items']:
+        if playlist['snippet']['title'] == 'Watch Later':
+            return playlist['id']
+
+
 def get_creds():
     '''Authorize client with OAuth2.'''
     flow = flow_from_clientsecrets(
@@ -77,8 +84,9 @@ def get_youtube():
 
 def main():
     youtube = get_youtube()
-    playlists = youtube.playlists().list(part='snippet', mine=True).execute()
-    print(len(playlists))
+    watchlater_id = get_watchlater_playlist(youtube)
+    if watchlater_id:
+        print(watchlater_id)
 
 
 if __name__ == '__main__':
