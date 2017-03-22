@@ -56,7 +56,7 @@ def get_watchlater_playlist(youtube):
 
 def get_playlist_videos(youtube, watchlater_id):
     '''Returns list of tuples containing the video id and position in Watch Later playlist'''
-    result = []
+    result = {}
 
     request = youtube.playlistItems().list(
         part='snippet',
@@ -70,10 +70,35 @@ def get_playlist_videos(youtube, watchlater_id):
         for video in response['items']:
             video_id = video['snippet']['resourceId']['videoId']
             position = video['snippet']['position']
-            result.append((video_id, position))
+            result[video_id] = position
 
         # Prepare next results page
         request = youtube.playlistItems().list_next(request, response)
+    return result
+
+
+def get_channel(youtube, videos):
+    '''Takes a list of video ids and returns the channel information'''
+    result = {}
+
+    # Partition videos due to max number of videos queryable with one api call
+    while videos:
+        to_query = videos[:50]
+        remaining = videos[50:]
+
+        response = youtube.videos().list(
+            part='snippet',
+            id=','.join(list(to_query)),
+            maxResults=50
+        ).execute()
+
+        for i in response['items']:
+            video_id = i['id']
+            channel_id = i['snippet']['channelId']
+            result[video_id] = channel_id
+
+        videos = remaining
+
     return result
 
 
@@ -110,8 +135,9 @@ def main():
     watchlater_id = get_watchlater_playlist(youtube)
     if not watchlater_id:
         exit('Oh noes, you don\'t have a playlist named Watch Later')
-    videos = get_playlist_videos(youtube, watchlater_id)
-    print(videos)
+    videos_position = get_playlist_videos(youtube, watchlater_id)
+    channel_map = get_channel(youtube, list(videos_position.keys()))
+    print(channel_map)
 
 
 if __name__ == '__main__':
