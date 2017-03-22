@@ -47,7 +47,8 @@ YOUTUBE_API_SERVICE_NAME = 'youtube'
 YOUTUBE_API_VERSION = 'v3'
 
 
-def main():
+def get_creds():
+    '''Authorize client with OAuth2.'''
     flow = flow_from_clientsecrets(
         CLIENT_SECRETS_FILE,
         message=MISSING_CLIENT_SECRETS_MESSAGE,
@@ -61,12 +62,21 @@ def main():
         flags = argparser.parse_args()
         credentials = run_flow(flow, storage, flags)
 
-    youtube = build(
+    return credentials
+
+
+def get_youtube():
+    '''Get youtube data v3 object.'''
+    creds = get_creds()
+    return build(
         YOUTUBE_API_SERVICE_NAME,
         YOUTUBE_API_VERSION,
-        http=credentials.authorize(httplib2.Http())
+        http=creds.authorize(httplib2.Http())
     )
 
+
+def main():
+    youtube = get_youtube()
     playlists = youtube.playlists().list(part='snippet', mine=True).execute()
     print(len(playlists))
 
