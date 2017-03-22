@@ -54,6 +54,29 @@ def get_watchlater_playlist(youtube):
             return playlist['id']
 
 
+def get_playlist_videos(youtube, watchlater_id):
+    '''Returns list of tuples containing the video id and position in Watch Later playlist'''
+    result = []
+
+    request = youtube.playlistItems().list(
+        part='snippet',
+        playlistId=watchlater_id,
+        maxResults=50
+    )
+
+    # Iterate through all reuslts pages
+    while request:
+        response = request.execute()
+        for video in response['items']:
+            video_id = video['snippet']['resourceId']['videoId']
+            position = video['snippet']['position']
+            result.append((video_id, position))
+
+        # Prepare next results page
+        request = youtube.playlistItems().list_next(request, response)
+    return result
+
+
 def get_creds():
     '''Authorize client with OAuth2.'''
     flow = flow_from_clientsecrets(
@@ -85,8 +108,10 @@ def get_youtube():
 def main():
     youtube = get_youtube()
     watchlater_id = get_watchlater_playlist(youtube)
-    if watchlater_id:
-        print(watchlater_id)
+    if not watchlater_id:
+        exit('Oh noes, you don\'t have a playlist named Watch Later')
+    videos = get_playlist_videos(youtube, watchlater_id)
+    print(videos)
 
 
 if __name__ == '__main__':
