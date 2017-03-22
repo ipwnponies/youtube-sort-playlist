@@ -68,7 +68,7 @@ def get_playlist_videos(youtube, watchlater_id):
     while request:
         response = request.execute()
 
-        result.extend([i['snippet'] for i in response['items']])
+        result.extend(response['items'])
 
         # Prepare next results page
         request = youtube.playlistItems().list_next(request, response)
@@ -101,16 +101,19 @@ def get_channel(youtube, videos):
 
 
 def sort_playlist(youtube, playlist_videos):
-    video_ids = [i['resourceId']['videoId'] for i in playlist_videos]
+    video_ids = [i['snippet']['resourceId']['videoId']
+                 for i in playlist_videos]
     channel_map = get_channel(youtube, video_ids)
 
     def sorter(val):
-        video_id = val['resourceId']['videoId']
+        video_id = val['snippet']['resourceId']['videoId']
         return channel_map[video_id]
 
     sorted_playlist = sorted(playlist_videos, key=sorter)
     for index, i in enumerate(sorted_playlist):
-        i['position'] = index
+        i['snippet']['position'] = index
+        print('{} is being put in pos {}'.format(i['snippet']['title'], index))
+        youtube.playlistItems().update(part='snippet', body=i).execute()
 
 
 def get_creds():
