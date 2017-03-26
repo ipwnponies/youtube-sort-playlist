@@ -81,7 +81,7 @@ def get_playlist_videos(youtube, watchlater_id):
 
 
 def get_channel(youtube, videos):
-    '''Returns a dict where video id and channelId are the key-value pairs.'''
+    '''Returns a dict where key is video id and the value is (channelId, release date) tuple.'''
     result = {}
 
     # Partition videos due to max number of videos queryable with one api call
@@ -98,7 +98,8 @@ def get_channel(youtube, videos):
         for i in response['items']:
             video_id = i['id']
             channel_id = i['snippet']['channelId']
-            result[video_id] = channel_id
+            published_date = i['snippet']['publishedAt']
+            result[video_id] = (channel_id, published_date)
 
         videos = remaining
 
@@ -111,11 +112,13 @@ def sort_playlist(youtube, playlist_videos):
                  for i in playlist_videos]
     channel_map = get_channel(youtube, video_ids)
 
-    def sorter(val):
-        video_id = val['snippet']['resourceId']['videoId']
-        return channel_map[video_id]
+    def sort_key(playlist_item):
+        '''Groups together videos from the same channel, sorted by date in ascending order.'''
+        video_id = playlist_item['snippet']['resourceId']['videoId']
+        channel_name, published_date = channel_map[video_id]
+        return '{}-{}'.format(channel_name, published_date)
 
-    sorted_playlist = sorted(playlist_videos, key=sorter)
+    sorted_playlist = sorted(playlist_videos, key=sort_key)
     for index, i in enumerate(sorted_playlist):
         i['snippet']['position'] = index
         print('{} is being put in pos {}'.format(i['snippet']['title'], index))

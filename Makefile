@@ -5,7 +5,7 @@ venv: requirements.txt requirements-dev.txt
 
 .PHONY: run
 run: venv
-	@echo Execute cool new script!
+	venv/bin/python playlist_updates.py
 
 .PHONY: clean
 clean:
