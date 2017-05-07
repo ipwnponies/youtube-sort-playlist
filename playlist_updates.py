@@ -159,8 +159,17 @@ def main():
     watchlater_id = get_watchlater_playlist(youtube)
     if not watchlater_id:
         exit('Oh noes, you don\'t have a playlist named Watch Later')
+
     playlist_videos = get_playlist_videos(youtube, watchlater_id)
-    sort_playlist(youtube, playlist_videos)
+
+    if playlist_videos:
+        sort_playlist(youtube, playlist_videos)
+    else:
+        exit(
+            'Playlist is empty! '
+            'Did you remember to copy over Youtube\'s Watch Later '
+            'to your personal Watch Later playlist?'
+        )
 
 
 if __name__ == '__main__':
