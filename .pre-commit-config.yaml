@@ -1,35 +1,36 @@
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    sha: 5bf6c09bfa1297d3692cadd621ef95f1284e33c0
-    hooks:
-    -   id: trailing-whitespace
-    -   id: end-of-file-fixer
-    -   id: autopep8-wrapper
-    -   id: check-docstring-first
-    -   id: check-json
-    -   id: check-added-large-files
-    -   id: check-yaml
-    -   id: debug-statements
-    -   id: name-tests-test
-    -   id: requirements-txt-fixer
-    -   id: flake8
-    -   id: check-case-conflict
-    -   id: detect-private-key
-    -   id: double-quote-string-fixer
--   repo: https://github.com/pre-commit/pre-commit
-    sha: 6e5ac079273c1499add3a85d9b5394d0f1ef1520
-    hooks:
-    -   id: validate_config
-    -   id: validate_manifest
--   repo: https://github.com/asottile/reorder_python_imports
-    sha: v0.3.2
-    hooks:
-    -   id: reorder-python-imports
--   repo: local
-    hooks:
-    -   id: pylint
-        name: Pylint
-        entry: venv/bin/pylint
-        language: system
-        files: \.py$
-        args:
-          - '--rcfile=pylintrc'
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  sha: 5bf6c09bfa1297d3692cadd621ef95f1284e33c0
+  hooks:
+    - id: trailing-whitespace
+    - id: end-of-file-fixer
+    - id: autopep8-wrapper
+      args: [--max-line-length=100]
+    - id: check-docstring-first
+    - id: check-json
+    - id: check-added-large-files
+    - id: check-yaml
+    - id: debug-statements
+    - id: name-tests-test
+    - id: requirements-txt-fixer
+    - id: flake8
+    - id: check-case-conflict
+    - id: detect-private-key
+    - id: double-quote-string-fixer
+- repo: https://github.com/pre-commit/pre-commit
+  sha: 6e5ac079273c1499add3a85d9b5394d0f1ef1520
+  hooks:
+    - id: validate_config
+    - id: validate_manifest
+- repo: https://github.com/asottile/reorder_python_imports
+  sha: v0.3.2
+  hooks:
+  - id: reorder-python-imports
+- repo: local
+  hooks:
+  - id: pylint
+    name: Pylint
+    entry: venv/bin/pylint
+    language: system
+    files: \.py$
+    args:
+      - '--rcfile=pylintrc'

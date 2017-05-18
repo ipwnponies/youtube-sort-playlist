@@ -1,9 +1,14 @@
 #! /usr/bin/env python
+import operator
 import os
 import sys
+from collections import namedtuple
+from functools import reduce
 
 import httplib2
 from apiclient.discovery import build  # pylint: disable=import-error
+from isodate import parse_duration
+from isodate import strftime
 from oauth2client.client import flow_from_clientsecrets
 from oauth2client.file import Storage
 from oauth2client.tools import argparser
@@ -46,6 +51,8 @@ YOUTUBE_READ_WRITE_SCOPE = 'https://www.googleapis.com/auth/youtube'
 YOUTUBE_API_SERVICE_NAME = 'youtube'
 YOUTUBE_API_VERSION = 'v3'
 
+VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
+
 
 def get_watchlater_playlist(youtube):
     '''Get the id of the 'Watch Later' playlist.
@@ -80,9 +87,13 @@ def get_playlist_videos(youtube, watchlater_id):
     return result
 
 
-def get_channel(youtube, videos):
-    '''Returns a dict where key is video id and the value is (channelId, release date) tuple.'''
+def get_video_info(youtube, playlist_videos):
+    '''Returns a dict of VideoInfo for each video
+
+    The key is video id and the value is VideoInfo.
+    '''
     result = {}
+    videos = [i['snippet']['resourceId']['videoId'] for i in playlist_videos]
 
     # Partition videos due to max number of videos queryable with one api call
     while videos:
@@ -90,7 +101,7 @@ def get_channel(youtube, videos):
         remaining = videos[50:]
 
         response = youtube.videos().list(
-            part='snippet',
+            part='snippet,contentDetails',
             id=','.join(list(to_query)),
             maxResults=50
         ).execute()
@@ -99,23 +110,21 @@ def get_channel(youtube, videos):
             video_id = i['id']
             channel_id = i['snippet']['channelId']
             published_date = i['snippet']['publishedAt']
-            result[video_id] = (channel_id, published_date)
+            duration = parse_duration(i['contentDetails']['duration'])
+            result[video_id] = VideoInfo(channel_id, published_date, duration)
 
         videos = remaining
 
     return result
 
 
-def sort_playlist(youtube, playlist_videos):
+def sort_playlist(youtube, playlist_videos, video_infos):
     '''Sorts a playlist and groups videos by channel.'''
-    video_ids = [i['snippet']['resourceId']['videoId']
-                 for i in playlist_videos]
-    channel_map = get_channel(youtube, video_ids)
 
     def sort_key(playlist_item):
         '''Groups together videos from the same channel, sorted by date in ascending order.'''
         video_id = playlist_item['snippet']['resourceId']['videoId']
-        channel_name, published_date = channel_map[video_id]
+        channel_name, published_date, _ = video_infos[video_id]
         return '{}-{}'.format(channel_name, published_date)
 
     sorted_playlist = sorted(playlist_videos, key=sort_key)
@@ -123,6 +132,12 @@ def sort_playlist(youtube, playlist_videos):
         i['snippet']['position'] = index
         print('{} is being put in pos {}'.format(i['snippet']['title'], index))
         youtube.playlistItems().update(part='snippet', body=i).execute()
+
+
+def print_duration(video_infos):
+    total_duration = reduce(operator.add, [video.duration for video in video_infos.values()])
+    print('\n' * 2)
+    print('Total duration of playlist is {}'.format(strftime(total_duration, '%H:%M')))
 
 
 def get_creds():
@@ -163,7 +178,9 @@ def main():
     playlist_videos = get_playlist_videos(youtube, watchlater_id)
 
     if playlist_videos:
-        sort_playlist(youtube, playlist_videos)
+        video_infos = get_video_info(youtube, playlist_videos)
+        sort_playlist(youtube, playlist_videos, video_infos)
+        print_duration(video_infos)
     else:
         exit(
             'Playlist is empty! '
