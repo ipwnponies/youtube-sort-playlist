@@ -7,8 +7,8 @@ help: ## Print help
 		awk 'BEGIN {FS = ":.*## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: venv
-venv: requirements.txt requirements-dev.txt ## Create virtualenv
-	bin/venv-update venv= -p python3 venv install= -r requirements-dev.txt
+venv:  ## Create virtualenv
+	bin/venv-update venv= -p python3 venv install= -r requirements-dev.txt -r requirements.txt
 	venv/bin/pre-commit autoupdate
 	venv/bin/pre-commit install
 
