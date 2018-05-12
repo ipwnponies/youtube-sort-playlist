@@ -55,19 +55,19 @@ VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration']
 
 
 def get_watchlater_playlist(youtube):
-    '''Get the id of the 'Watch Later' playlist.
+    '''Get the id of the 'Sort Watch Later' playlist.
 
-    The 'Watch Later' playlist is regular playlist and is not the same as the magical one that all
+    The 'Sort Watch Later' playlist is regular playlist and is not the same as the magical one that all
     youtube users have by default.
     '''
     playlists = youtube.playlists().list(part='snippet', mine=True).execute()
     for playlist in playlists['items']:
-        if playlist['snippet']['title'] == 'Watch Later':
+        if playlist['snippet']['title'] == 'Sort Watch Later':
             return playlist['id']
 
 
 def get_playlist_videos(youtube, watchlater_id):
-    '''Returns list of playlistItems from Watch Later playlist'''
+    '''Returns list of playlistItems from Sort Watch Later playlist'''
     result = []
 
     request = youtube.playlistItems().list(
@@ -169,11 +169,11 @@ def get_youtube():
 
 
 def main():
-    '''Execute the main script to sort Watch Later playlist.'''
+    '''Execute the main script to sort Sort Watch Later playlist.'''
     youtube = get_youtube()
     watchlater_id = get_watchlater_playlist(youtube)
     if not watchlater_id:
-        exit('Oh noes, you don\'t have a playlist named Watch Later')
+        exit('Oh noes, you don\'t have a playlist named Sort Watch Later')
 
     playlist_videos = get_playlist_videos(youtube, watchlater_id)
 
@@ -185,7 +185,7 @@ def main():
         exit(
             'Playlist is empty! '
             'Did you remember to copy over Youtube\'s Watch Later '
-            'to your personal Watch Later playlist?'
+            'to your personal Sort Watch Later playlist?'
         )
 
 
