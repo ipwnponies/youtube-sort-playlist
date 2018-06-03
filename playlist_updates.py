@@ -236,23 +236,17 @@ def parse_args():
     return parser.parse_args()
 
 
-def update():
-    pass
+def update(youtube, args):
+    channels = get_subscribed_channels(youtube)
+    for channel in channels:
+        add_channel_videos_watch_later(youtube, channel['id'], args.since)
 
 
-def sort():
-    pass
-
-
-def main():
-    '''Execute the main script to sort Sort Watch Later playlist.'''
-    args = parse_args()
-    args.func()
-
-    youtube = get_youtube()
+def sort(youtube, args):  # pylint: disable=unused-argument
+    '''Sort the 'Sort Watch Later' playlist.'''
     watchlater_id = get_watchlater_playlist(youtube)
     if not watchlater_id:
-        exit('Oh noes, you don\'t have a playlist named Sort Watch Later')
+        exit("Oh noes, you don't have a playlist named Sort Watch Later")
 
     playlist_videos = get_playlist_videos(youtube, watchlater_id)
 
@@ -263,9 +257,16 @@ def main():
     else:
         exit(
             'Playlist is empty! '
-            'Did you remember to copy over Youtube\'s Watch Later '
+            "Did you remember to copy over Youtube's Watch Later "
             'to your personal Sort Watch Later playlist?',
         )
+
+
+def main():
+    args = parse_args()
+
+    youtube = get_youtube()
+    args.func(youtube, args)
 
 
 if __name__ == '__main__':
