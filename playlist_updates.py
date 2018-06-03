@@ -177,6 +177,34 @@ def get_subscribed_channels(youtube,):
     return channels
 
 
+def add_channel_videos_watch_later(youtube, channel, uploaded_after):
+    recent_videos = youtube.search().list(
+        part='snippet',
+        channelId=channel,
+        type='video',
+        publishedAfter=uploaded_after,
+    ).execute()
+
+    video_ids = [i.id.videoId for i in addict.Dict(recent_videos)['items']]
+    for video_id in video_ids:
+        add_video_to_watch_later(youtube, video_id)
+
+
+def add_video_to_watch_later(youtube, video_id):
+    youtube.playlistItems().insert(
+        part='snippet',
+        body={
+            'snippet': {
+                'playlistId': 'WL',
+                'resourceId': {
+                    'kind': 'youtube#video',
+                    'videoId': video_id,
+                },
+            },
+        },
+    ).execute()
+
+
 def main():
     '''Execute the main script to sort Sort Watch Later playlist.'''
     youtube = get_youtube()
