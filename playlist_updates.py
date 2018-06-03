@@ -169,27 +169,52 @@ def get_youtube():
     )
 
 
-def get_subscribed_channels(youtube,):
-    subscriptions = youtube.subscriptions().list(part='snippet', mine=True).execute()
-    subscriptions = addict.Dict(subscriptions)
-    channels = [
-        {'title': i.snippet.title, 'id': i.snippet.resourceId.channelId}
-        for i in subscriptions['items']
-    ]
+def get_subscribed_channels(youtube):
+    channels = []
+    next_page_token = None
+    request = youtube.subscriptions().list(
+        part='snippet',
+        mine=True,
+        maxResults=50,
+        pageToken=next_page_token,
+    )
+
+    while request:
+        response = request.execute()
+        response = addict.Dict(response)
+        channels.extend(
+            {'title': i.snippet.title, 'id': i.snippet.resourceId.channelId}
+            for i in response['items']
+        )
+        request = youtube.subscriptions().list_next(request, response)
+
     return channels
 
 
 def add_channel_videos_watch_later(youtube, channel, uploaded_after):
-    recent_videos = youtube.search().list(
+    video_ids = []
+    request = youtube.search().list(
         part='snippet',
         channelId=channel,
         type='video',
         publishedAfter=uploaded_after,
-    ).execute()
+        maxResults=50,
+    )
 
-    video_ids = [i.id.videoId for i in addict.Dict(recent_videos)['items']]
+    while request:
+        response = addict.Dict(request.execute())
+        recent_videos = [
+            {'id': i.id.videoId, 'title': i.snippet.title}
+            for i in response['items']
+        ]
+
+        if not recent_videos:
+            break
+        video_ids.extend(recent_videos)
+        request = youtube.search().list_next(request, response)
+
     for video_id in video_ids:
-        add_video_to_watch_later(youtube, video_id)
+        print('Adding video to playlist: {}'.format(video_id['title']))
 
 
 def add_video_to_watch_later(youtube, video_id):
