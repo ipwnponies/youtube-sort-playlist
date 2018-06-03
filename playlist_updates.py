@@ -5,6 +5,7 @@ import sys
 from collections import namedtuple
 from functools import reduce
 
+import addict
 import httplib2
 from apiclient.discovery import build  # pylint: disable=import-error
 from isodate import parse_duration
@@ -74,7 +75,7 @@ def get_playlist_videos(youtube, watchlater_id):
         maxResults=50,
     )
 
-    # Iterate through all reuslts pages
+    # Iterate through all results pages
     while request:
         response = request.execute()
 
@@ -164,6 +165,16 @@ def get_youtube():
         YOUTUBE_API_VERSION,
         http=creds.authorize(httplib2.Http()),
     )
+
+
+def get_subscribed_channels(youtube,):
+    subscriptions = youtube.subscriptions().list(part='snippet', mine=True).execute()
+    subscriptions = addict.Dict(subscriptions)
+    channels = [
+        {'title': i.snippet.title, 'id': i.snippet.resourceId.channelId}
+        for i in subscriptions['items']
+    ]
+    return channels
 
 
 def main():
