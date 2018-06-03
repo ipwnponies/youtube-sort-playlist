@@ -4,3 +4,6 @@ reports = no
 
 [MESSAGES CONTROL]
 disable = locally-disabled, missing-docstring
+
+[FORMAT]
+max-line-length=120

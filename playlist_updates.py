@@ -42,8 +42,7 @@ with information from the {{ Cloud Console }}
 
 For more information about the client_secrets.json file format, please visit:
 https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
-""" % os.path.abspath(os.path.join(os.path.dirname(__file__),
-                                   CLIENT_SECRETS_FILE))
+""" % os.path.abspath(os.path.join(os.path.dirname(__file__), CLIENT_SECRETS_FILE,))
 
 # This OAuth 2.0 access scope allows for full read/write access to the
 # authenticated user's account.
@@ -61,9 +60,8 @@ def get_watchlater_playlist(youtube):
     youtube users have by default.
     '''
     playlists = youtube.playlists().list(part='snippet', mine=True).execute()
-    for playlist in playlists['items']:
-        if playlist['snippet']['title'] == 'Sort Watch Later':
-            return playlist['id']
+    playlist_id = next(i['id'] for i in playlists['items'] if i['snippet']['title'] == 'Sort Watch Later')
+    return playlist_id
 
 
 def get_playlist_videos(youtube, watchlater_id):
@@ -73,7 +71,7 @@ def get_playlist_videos(youtube, watchlater_id):
     request = youtube.playlistItems().list(
         part='snippet',
         playlistId=watchlater_id,
-        maxResults=50
+        maxResults=50,
     )
 
     # Iterate through all reuslts pages
@@ -103,7 +101,7 @@ def get_video_info(youtube, playlist_videos):
         response = youtube.videos().list(
             part='snippet,contentDetails',
             id=','.join(list(to_query)),
-            maxResults=50
+            maxResults=50,
         ).execute()
 
         for i in response['items']:
@@ -145,7 +143,7 @@ def get_creds():
     flow = flow_from_clientsecrets(
         CLIENT_SECRETS_FILE,
         message=MISSING_CLIENT_SECRETS_MESSAGE,
-        scope=YOUTUBE_READ_WRITE_SCOPE
+        scope=YOUTUBE_READ_WRITE_SCOPE,
     )
 
     storage = Storage('%s-oauth2.json' % sys.argv[0])
@@ -164,7 +162,7 @@ def get_youtube():
     return build(
         YOUTUBE_API_SERVICE_NAME,
         YOUTUBE_API_VERSION,
-        http=creds.authorize(httplib2.Http())
+        http=creds.authorize(httplib2.Http()),
     )
 
 
@@ -185,7 +183,7 @@ def main():
         exit(
             'Playlist is empty! '
             'Did you remember to copy over Youtube\'s Watch Later '
-            'to your personal Sort Watch Later playlist?'
+            'to your personal Sort Watch Later playlist?',
         )
 
 
