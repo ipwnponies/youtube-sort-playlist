@@ -56,180 +56,206 @@ YOUTUBE_API_VERSION = 'v3'
 VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
 
 
-def get_watchlater_playlist(youtube):
-    '''Get the id of the 'Sort Watch Later' playlist.
+class YoutubeManager():
+    def __init__(self, dry_run):
+        self.youtube = self.get_youtube()
+        self.dry_run = dry_run
 
-    The 'Sort Watch Later' playlist is regular playlist and is not the same as the magical one that all
-    youtube users have by default.
-    '''
-    playlists = youtube.playlists().list(part='snippet', mine=True).execute()
-    playlist_id = next(i['id'] for i in playlists['items'] if i['snippet']['title'] == 'Sort Watch Later')
-    return playlist_id
-
-
-def get_playlist_videos(youtube, watchlater_id):
-    '''Returns list of playlistItems from Sort Watch Later playlist'''
-    result = []
-
-    request = youtube.playlistItems().list(
-        part='snippet',
-        playlistId=watchlater_id,
-        maxResults=50,
-    )
-
-    # Iterate through all results pages
-    while request:
-        response = request.execute()
-
-        result.extend(response['items'])
-
-        # Prepare next results page
-        request = youtube.playlistItems().list_next(request, response)
-    return result
-
-
-def get_video_info(youtube, playlist_videos):
-    '''Returns a dict of VideoInfo for each video
-
-    The key is video id and the value is VideoInfo.
-    '''
-    result = {}
-    videos = [i['snippet']['resourceId']['videoId'] for i in playlist_videos]
-
-    # Partition videos due to max number of videos queryable with one api call
-    while videos:
-        to_query = videos[:50]
-        remaining = videos[50:]
-
-        response = youtube.videos().list(
-            part='snippet,contentDetails',
-            id=','.join(list(to_query)),
-            maxResults=50,
-        ).execute()
-
-        for i in response['items']:
-            video_id = i['id']
-            channel_id = i['snippet']['channelId']
-            published_date = i['snippet']['publishedAt']
-            duration = parse_duration(i['contentDetails']['duration'])
-            result[video_id] = VideoInfo(channel_id, published_date, duration)
-
-        videos = remaining
-
-    return result
-
-
-def sort_playlist(youtube, playlist_videos, video_infos):
-    '''Sorts a playlist and groups videos by channel.'''
-
-    def sort_key(playlist_item):
-        '''Groups together videos from the same channel, sorted by date in ascending order.'''
-        video_id = playlist_item['snippet']['resourceId']['videoId']
-        channel_name, published_date, _ = video_infos[video_id]
-        return '{}-{}'.format(channel_name, published_date)
-
-    sorted_playlist = sorted(playlist_videos, key=sort_key)
-    for index, i in enumerate(sorted_playlist):
-        i['snippet']['position'] = index
-        print('{} is being put in pos {}'.format(i['snippet']['title'], index))
-        youtube.playlistItems().update(part='snippet', body=i).execute()
-
-
-def print_duration(video_infos):
-    total_duration = reduce(operator.add, [video.duration for video in video_infos.values()])
-    print('\n' * 2)
-    print('Total duration of playlist is {}'.format(strftime(total_duration, '%H:%M')))
-
-
-def get_creds():
-    '''Authorize client with OAuth2.'''
-    flow = flow_from_clientsecrets(
-        CLIENT_SECRETS_FILE,
-        message=MISSING_CLIENT_SECRETS_MESSAGE,
-        scope=YOUTUBE_READ_WRITE_SCOPE,
-    )
-
-    storage = Storage('%s-oauth2.json' % sys.argv[0])
-    credentials = storage.get()
-
-    if credentials is None or credentials.invalid:
-        flags = argparser.parse_args()
-        credentials = run_flow(flow, storage, flags)
-
-    return credentials
-
-
-def get_youtube():
-    '''Get youtube data v3 object.'''
-    creds = get_creds()
-    return build(
-        YOUTUBE_API_SERVICE_NAME,
-        YOUTUBE_API_VERSION,
-        http=creds.authorize(httplib2.Http()),
-    )
-
-
-def get_subscribed_channels(youtube):
-    channels = []
-    next_page_token = None
-    request = youtube.subscriptions().list(
-        part='snippet',
-        mine=True,
-        maxResults=50,
-        pageToken=next_page_token,
-    )
-
-    while request:
-        response = request.execute()
-        response = addict.Dict(response)
-        channels.extend(
-            {'title': i.snippet.title, 'id': i.snippet.resourceId.channelId}
-            for i in response['items']
+    @staticmethod
+    def get_creds():
+        '''Authorize client with OAuth2.'''
+        flow = flow_from_clientsecrets(
+            CLIENT_SECRETS_FILE,
+            message=MISSING_CLIENT_SECRETS_MESSAGE,
+            scope=YOUTUBE_READ_WRITE_SCOPE,
         )
-        request = youtube.subscriptions().list_next(request, response)
 
-    return channels
+        storage = Storage('{}-oauth2.json'.format(sys.argv[0]))
+        credentials = storage.get()
 
+        if credentials is None or credentials.invalid:
+            flags = argparser.parse_args()
+            credentials = run_flow(flow, storage, flags)
 
-def add_channel_videos_watch_later(youtube, channel, uploaded_after):
-    video_ids = []
-    request = youtube.search().list(
-        part='snippet',
-        channelId=channel,
-        type='video',
-        publishedAfter=uploaded_after,
-        maxResults=50,
-    )
+        return credentials
 
-    while request:
-        response = addict.Dict(request.execute())
-        recent_videos = [
-            {'id': i.id.videoId, 'title': i.snippet.title}
-            for i in response['items']
-        ]
+    def get_youtube(self):
+        '''Get youtube data v3 object.'''
+        creds = self.get_creds()
+        return build(
+            YOUTUBE_API_SERVICE_NAME,
+            YOUTUBE_API_VERSION,
+            http=creds.authorize(httplib2.Http()),
+        )
 
-        if not recent_videos:
-            break
-        video_ids.extend(recent_videos)
-        request = youtube.search().list_next(request, response)
+    def get_watchlater_playlist(self):
+        '''Get the id of the 'Sort Watch Later' playlist.
 
-    for video_id in video_ids:
+        The 'Sort Watch Later' playlist is regular playlist and is not the same as the magical one that all
+        youtube users have by default.
+        '''
+        playlists = self.youtube.playlists().list(part='snippet', mine=True).execute()
+        playlist_id = next(i['id'] for i in playlists['items'] if i['snippet']['title'] == 'Sort Watch Later')
+        return playlist_id
+
+    def get_playlist_videos(self, watchlater_id):
+        '''Returns list of playlistItems from Sort Watch Later playlist'''
+        result = []
+
+        request = self.youtube.playlistItems().list(
+            part='snippet',
+            playlistId=watchlater_id,
+            maxResults=50,
+        )
+
+        # Iterate through all results pages
+        while request:
+            response = request.execute()
+
+            result.extend(response['items'])
+
+            # Prepare next results page
+            request = self.youtube.playlistItems().list_next(request, response)
+        return result
+
+    def get_video_info(self, playlist_videos):
+        '''Returns a dict of VideoInfo for each video
+
+        The key is video id and the value is VideoInfo.
+        '''
+        result = {}
+        videos = [i['snippet']['resourceId']['videoId'] for i in playlist_videos]
+
+        # Partition videos due to max number of videos queryable with one api call
+        while videos:
+            to_query = videos[:50]
+            remaining = videos[50:]
+
+            response = self.youtube.videos().list(
+                part='snippet,contentDetails',
+                id=','.join(list(to_query)),
+                maxResults=50,
+            ).execute()
+
+            for i in response['items']:
+                video_id = i['id']
+                channel_id = i['snippet']['channelId']
+                published_date = i['snippet']['publishedAt']
+                duration = parse_duration(i['contentDetails']['duration'])
+                result[video_id] = VideoInfo(channel_id, published_date, duration)
+
+            videos = remaining
+
+        return result
+
+    def sort_playlist(self, playlist_videos, video_infos):
+        '''Sorts a playlist and groups videos by channel.'''
+
+        def sort_key(playlist_item):
+            '''Groups together videos from the same channel, sorted by date in ascending order.'''
+            video_id = playlist_item['snippet']['resourceId']['videoId']
+            channel_name, published_date, _ = video_infos[video_id]
+            return '{}-{}'.format(channel_name, published_date)
+
+        sorted_playlist = sorted(playlist_videos, key=sort_key)
+        for index, i in enumerate(sorted_playlist):
+            print('{} is being put in pos {}'.format(i['snippet']['title'], index))
+
+            if not self.dry_run:
+                i['snippet']['position'] = index
+                self.youtube.playlistItems().update(part='snippet', body=i).execute()
+
+    def get_subscribed_channels(self):
+        channels = []
+        next_page_token = None
+        request = self.youtube.subscriptions().list(
+            part='snippet',
+            mine=True,
+            maxResults=50,
+            pageToken=next_page_token,
+        )
+
+        while request:
+            response = request.execute()
+            response = addict.Dict(response)
+            channels.extend(
+                {'title': i.snippet.title, 'id': i.snippet.resourceId.channelId}
+                for i in response['items']
+            )
+            request = self.youtube.subscriptions().list_next(request, response)
+
+        return channels
+
+    def add_channel_videos_watch_later(self, channel, uploaded_after):
+        video_ids = []
+        request = self.youtube.search().list(
+            part='snippet',
+            channelId=channel,
+            type='video',
+            publishedAfter=uploaded_after,
+            maxResults=50,
+        )
+
+        while request:
+            response = addict.Dict(request.execute())
+            recent_videos = [
+                {'id': i.id.videoId, 'title': i.snippet.title}
+                for i in response['items']
+            ]
+
+            if not recent_videos:
+                break
+            video_ids.extend(recent_videos)
+            request = self.youtube.search().list_next(request, response)
+
+        for video_id in video_ids:
+            self.add_video_to_watch_later(video_id)
+
+    def add_video_to_watch_later(self, video_id):
         print('Adding video to playlist: {}'.format(video_id['title']))
-
-
-def add_video_to_watch_later(youtube, video_id):
-    youtube.playlistItems().insert(
-        part='snippet',
-        body={
-            'snippet': {
-                'playlistId': 'WL',
-                'resourceId': {
-                    'kind': 'youtube#video',
-                    'videoId': video_id,
+        if not self.dry_run:
+            self.youtube.playlistItems().insert(
+                part='snippet',
+                body={
+                    'snippet': {
+                        'playlistId': 'WL',
+                        'resourceId': {
+                            'kind': 'youtube#video',
+                            'videoId': video_id['id'],
+                        },
+                    },
                 },
-            },
-        },
-    ).execute()
+            ).execute()
+
+    def update(self, uploaded_after):
+        channels = self.get_subscribed_channels()
+        for channel in channels:
+            self.add_channel_videos_watch_later(channel['id'], uploaded_after)
+
+    def sort(self):
+        '''Sort the 'Sort Watch Later' playlist.'''
+        watchlater_id = self.get_watchlater_playlist()
+        if not watchlater_id:
+            exit("Oh noes, you don't have a playlist named Sort Watch Later")
+
+        playlist_videos = self.get_playlist_videos(watchlater_id)
+
+        if playlist_videos:
+            video_infos = self.get_video_info(playlist_videos)
+            self.sort_playlist(playlist_videos, video_infos)
+            self.print_duration(video_infos)
+        else:
+            exit(
+                'Playlist is empty! '
+                "Did you remember to copy over Youtube's Watch Later "
+                'to your personal Sort Watch Later playlist?',
+            )
+
+    @staticmethod
+    def print_duration(video_infos):
+        total_duration = reduce(operator.add, [video.duration for video in video_infos.values()])
+        print('\n' * 2)
+        print('Total duration of playlist is {}'.format(strftime(total_duration, '%H:%M')))
 
 
 def parse_args():
@@ -237,18 +263,25 @@ def parse_args():
         description='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.',
     )
 
-    subparser = parser.add_subparsers(title='sub-commands')
-    sort_parser = subparser.add_parser(
+    common_parser = argparse.ArgumentParser(add_help=False)
+    common_parser.add_argument('--dry-run', action='store_true')
+
+    subparser = parser.add_subparsers(
+        title='sub-commands',
+        dest='subcommand',
+    )
+    subparser.add_parser(
         'sort',
         help="Sort 'Watch Later' playlist.",
         description="Sort the 'Sort Watch Later' playlist and group by channel.",
+        parents=[common_parser],
     )
-    sort_parser.set_defaults(func=sort)
 
     update_parser = subparser.add_parser(
         'update',
         help='Add recent videos to watch later playlist.',
         description='Update the watch later playlist with recent videos from subscribed channels.',
+        parents=[common_parser],
     )
     update_parser.add_argument(
         '--since',
@@ -256,42 +289,18 @@ def parse_args():
         help='Start date to filter videos by.',
         type=arrow.get,
     )
-    update_parser.set_defaults(func=update)
 
     return parser.parse_args()
-
-
-def update(youtube, args):
-    channels = get_subscribed_channels(youtube)
-    for channel in channels:
-        add_channel_videos_watch_later(youtube, channel['id'], args.since)
-
-
-def sort(youtube, args):  # pylint: disable=unused-argument
-    '''Sort the 'Sort Watch Later' playlist.'''
-    watchlater_id = get_watchlater_playlist(youtube)
-    if not watchlater_id:
-        exit("Oh noes, you don't have a playlist named Sort Watch Later")
-
-    playlist_videos = get_playlist_videos(youtube, watchlater_id)
-
-    if playlist_videos:
-        video_infos = get_video_info(youtube, playlist_videos)
-        sort_playlist(youtube, playlist_videos, video_infos)
-        print_duration(video_infos)
-    else:
-        exit(
-            'Playlist is empty! '
-            "Did you remember to copy over Youtube's Watch Later "
-            'to your personal Sort Watch Later playlist?',
-        )
 
 
 def main():
     args = parse_args()
 
-    youtube = get_youtube()
-    args.func(youtube, args)
+    youtube_manager = YoutubeManager(args.dry_run)
+    if args.subcommand == 'sort':
+        youtube_manager.sort()
+    elif args.subcommand == 'update':
+        youtube_manager.update(args.since)
 
 
 if __name__ == '__main__':
