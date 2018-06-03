@@ -1,4 +1,5 @@
 #! /usr/bin/env python
+import argparse
 import operator
 import os
 import sys
@@ -6,6 +7,7 @@ from collections import namedtuple
 from functools import reduce
 
 import addict
+import arrow
 import httplib2
 from apiclient.discovery import build  # pylint: disable=import-error
 from isodate import parse_duration
@@ -205,8 +207,48 @@ def add_video_to_watch_later(youtube, video_id):
     ).execute()
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.',
+    )
+
+    subparser = parser.add_subparsers(title='sub-commands')
+    sort_parser = subparser.add_parser(
+        'sort',
+        help="Sort 'Watch Later' playlist.",
+        description="Sort the 'Sort Watch Later' playlist and group by channel.",
+    )
+    sort_parser.set_defaults(func=sort)
+
+    update_parser = subparser.add_parser(
+        'update',
+        help='Add recent videos to watch later playlist.',
+        description='Update the watch later playlist with recent videos from subscribed channels.',
+    )
+    update_parser.add_argument(
+        '--since',
+        required=True,
+        help='Start date to filter videos by.',
+        type=arrow.get,
+    )
+    update_parser.set_defaults(func=update)
+
+    return parser.parse_args()
+
+
+def update():
+    pass
+
+
+def sort():
+    pass
+
+
 def main():
     '''Execute the main script to sort Sort Watch Later playlist.'''
+    args = parse_args()
+    args.func()
+
     youtube = get_youtube()
     watchlater_id = get_watchlater_playlist(youtube)
     if not watchlater_id:
