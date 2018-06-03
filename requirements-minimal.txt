@@ -1,2 +1,4 @@
+addict
+arrow
 google-api-python-client
 isodate

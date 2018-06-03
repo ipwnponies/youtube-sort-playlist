@@ -1,10 +1,13 @@
 #! /usr/bin/env python
+import argparse
 import operator
 import os
 import sys
 from collections import namedtuple
 from functools import reduce
 
+import addict
+import arrow
 import httplib2
 from apiclient.discovery import build  # pylint: disable=import-error
 from isodate import parse_duration
@@ -74,7 +77,7 @@ def get_playlist_videos(youtube, watchlater_id):
         maxResults=50,
     )
 
-    # Iterate through all reuslts pages
+    # Iterate through all results pages
     while request:
         response = request.execute()
 
@@ -166,12 +169,109 @@ def get_youtube():
     )
 
 
-def main():
-    '''Execute the main script to sort Sort Watch Later playlist.'''
-    youtube = get_youtube()
+def get_subscribed_channels(youtube):
+    channels = []
+    next_page_token = None
+    request = youtube.subscriptions().list(
+        part='snippet',
+        mine=True,
+        maxResults=50,
+        pageToken=next_page_token,
+    )
+
+    while request:
+        response = request.execute()
+        response = addict.Dict(response)
+        channels.extend(
+            {'title': i.snippet.title, 'id': i.snippet.resourceId.channelId}
+            for i in response['items']
+        )
+        request = youtube.subscriptions().list_next(request, response)
+
+    return channels
+
+
+def add_channel_videos_watch_later(youtube, channel, uploaded_after):
+    video_ids = []
+    request = youtube.search().list(
+        part='snippet',
+        channelId=channel,
+        type='video',
+        publishedAfter=uploaded_after,
+        maxResults=50,
+    )
+
+    while request:
+        response = addict.Dict(request.execute())
+        recent_videos = [
+            {'id': i.id.videoId, 'title': i.snippet.title}
+            for i in response['items']
+        ]
+
+        if not recent_videos:
+            break
+        video_ids.extend(recent_videos)
+        request = youtube.search().list_next(request, response)
+
+    for video_id in video_ids:
+        print('Adding video to playlist: {}'.format(video_id['title']))
+
+
+def add_video_to_watch_later(youtube, video_id):
+    youtube.playlistItems().insert(
+        part='snippet',
+        body={
+            'snippet': {
+                'playlistId': 'WL',
+                'resourceId': {
+                    'kind': 'youtube#video',
+                    'videoId': video_id,
+                },
+            },
+        },
+    ).execute()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.',
+    )
+
+    subparser = parser.add_subparsers(title='sub-commands')
+    sort_parser = subparser.add_parser(
+        'sort',
+        help="Sort 'Watch Later' playlist.",
+        description="Sort the 'Sort Watch Later' playlist and group by channel.",
+    )
+    sort_parser.set_defaults(func=sort)
+
+    update_parser = subparser.add_parser(
+        'update',
+        help='Add recent videos to watch later playlist.',
+        description='Update the watch later playlist with recent videos from subscribed channels.',
+    )
+    update_parser.add_argument(
+        '--since',
+        required=True,
+        help='Start date to filter videos by.',
+        type=arrow.get,
+    )
+    update_parser.set_defaults(func=update)
+
+    return parser.parse_args()
+
+
+def update(youtube, args):
+    channels = get_subscribed_channels(youtube)
+    for channel in channels:
+        add_channel_videos_watch_later(youtube, channel['id'], args.since)
+
+
+def sort(youtube, args):  # pylint: disable=unused-argument
+    '''Sort the 'Sort Watch Later' playlist.'''
     watchlater_id = get_watchlater_playlist(youtube)
     if not watchlater_id:
-        exit('Oh noes, you don\'t have a playlist named Sort Watch Later')
+        exit("Oh noes, you don't have a playlist named Sort Watch Later")
 
     playlist_videos = get_playlist_videos(youtube, watchlater_id)
 
@@ -182,9 +282,16 @@ def main():
     else:
         exit(
             'Playlist is empty! '
-            'Did you remember to copy over Youtube\'s Watch Later '
+            "Did you remember to copy over Youtube's Watch Later "
             'to your personal Sort Watch Later playlist?',
         )
+
+
+def main():
+    args = parse_args()
+
+    youtube = get_youtube()
+    args.func(youtube, args)
 
 
 if __name__ == '__main__':
