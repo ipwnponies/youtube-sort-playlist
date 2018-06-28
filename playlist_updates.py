@@ -4,11 +4,14 @@ import operator
 import os
 import sys
 from collections import namedtuple
+from functools import lru_cache
 from functools import reduce
+from pathlib import Path
 
 import addict
 import arrow
 import httplib2
+import yaml
 from apiclient.discovery import build  # pylint: disable=import-error
 from isodate import parse_duration
 from isodate import strftime
@@ -16,6 +19,7 @@ from oauth2client.client import flow_from_clientsecrets
 from oauth2client.file import Storage
 from oauth2client.tools import argparser
 from oauth2client.tools import run_flow
+from xdg import XDG_CACHE_HOME
 
 
 # The CLIENT_SECRETS_FILE variable specifies the name of a file that contains
@@ -227,10 +231,31 @@ class YoutubeManager():
                 },
             ).execute()
 
-    def update(self, uploaded_after):
+    def update(self, uploaded_after, only_allowed=False):
         channels = self.get_subscribed_channels()
-        for channel in channels:
+        config = read_config()
+        auto_add = config.setdefault('auto_add', [])
+
+        if uploaded_after is None:
+            if 'last_updated' in config:
+                uploaded_after = arrow.get(config['last_updated'])
+            else:
+                uploaded_after = arrow.now().shift(weeks=-2)
+
+        if not only_allowed:
+            unknown_channels = [i for i in channels if i['id'] not in auto_add]
+            for channel in unknown_channels:
+                response = input('Want to auto-add videos from "{}"? y/n: '.format(channel['title']))
+                if response == 'y':
+                    auto_add.append(channel['id'])
+            write_config(config)
+
+        allowed_channels = [i for i in channels if i['id'] in auto_add]
+        for channel in allowed_channels:
             self.add_channel_videos_watch_later(channel['id'], uploaded_after)
+
+        config['last_updated'] = arrow.now().format()
+        write_config(config)
 
     def sort(self):
         '''Sort the 'Sort Watch Later' playlist.'''
@@ -256,6 +281,23 @@ class YoutubeManager():
         total_duration = reduce(operator.add, [video.duration for video in video_infos.values()])
         print('\n' * 2)
         print('Total duration of playlist is {}'.format(strftime(total_duration, '%H:%M')))
+
+
+@lru_cache(1)
+def read_config():
+    config_dir = Path(XDG_CACHE_HOME) / 'youtube-sort-playlist'
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    config_file = config_dir / 'config.yaml'
+    config_file.touch()
+
+    with config_file.open('r') as config:
+        return yaml.load(config) or {}
+
+
+def write_config(config):
+    with open(os.path.join(XDG_CACHE_HOME, 'youtube-sort-playlist', 'config.yaml'), 'w') as file:
+        file.write(yaml.dump(config, default_flow_style=False))
 
 
 def parse_args():
@@ -285,9 +327,14 @@ def parse_args():
     )
     update_parser.add_argument(
         '--since',
-        required=True,
         help='Start date to filter videos by.',
         type=arrow.get,
+    )
+    update_parser.add_argument(
+        '-f',
+        '--only-allowed',
+        help='Auto add videos from known and allowed channels.',
+        action='store_true',
     )
 
     return parser.parse_args()
@@ -300,7 +347,7 @@ def main():
     if args.subcommand == 'sort':
         youtube_manager.sort()
     elif args.subcommand == 'update':
-        youtube_manager.update(args.since)
+        youtube_manager.update(args.since, args.only_allowed)
 
 
 if __name__ == '__main__':
