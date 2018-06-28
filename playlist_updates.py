@@ -236,6 +236,12 @@ class YoutubeManager():
         config = read_config()
         auto_add = config.setdefault('auto_add', [])
 
+        if uploaded_after is None:
+            if 'last_updated' in config:
+                uploaded_after = arrow.get(config['last_updated'])
+            else:
+                uploaded_after = arrow.now().shift(weeks=-2)
+
         if not only_allowed:
             unknown_channels = [i for i in channels if i['id'] not in auto_add]
             for channel in unknown_channels:
@@ -247,6 +253,9 @@ class YoutubeManager():
         allowed_channels = [i for i in channels if i['id'] in auto_add]
         for channel in allowed_channels:
             self.add_channel_videos_watch_later(channel['id'], uploaded_after)
+
+        config['last_updated'] = arrow.now().format()
+        write_config(config)
 
     def sort(self):
         '''Sort the 'Sort Watch Later' playlist.'''
@@ -318,7 +327,6 @@ def parse_args():
     )
     update_parser.add_argument(
         '--since',
-        required=True,
         help='Start date to filter videos by.',
         type=arrow.get,
     )
