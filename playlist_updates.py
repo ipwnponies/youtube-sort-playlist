@@ -19,6 +19,7 @@ from oauth2client.client import flow_from_clientsecrets
 from oauth2client.file import Storage
 from oauth2client.tools import argparser
 from oauth2client.tools import run_flow
+from tqdm import tqdm
 from xdg import XDG_CACHE_HOME
 
 
@@ -162,7 +163,7 @@ class YoutubeManager():
             return '{}-{}'.format(channel_name, published_date)
 
         sorted_playlist = sorted(playlist_videos, key=sort_key)
-        for index, i in enumerate(sorted_playlist):
+        for index, i in enumerate(tqdm(sorted_playlist, unit='video')):
             print('{} is being put in pos {}'.format(i['snippet']['title'], index))
 
             if not self.dry_run:
@@ -251,7 +252,7 @@ class YoutubeManager():
             write_config(config)
 
         allowed_channels = [i for i in channels if i['id'] in auto_add]
-        for channel in allowed_channels:
+        for channel in tqdm(allowed_channels, unit='video'):
             self.add_channel_videos_watch_later(channel['id'], uploaded_after)
 
         config['last_updated'] = arrow.now().format()
