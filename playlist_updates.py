@@ -10,6 +10,7 @@ from pathlib import Path
 
 import addict
 import arrow
+import googleapiclient.errors
 import httplib2
 import yaml
 from apiclient.discovery import build  # pylint: disable=import-error
@@ -219,18 +220,24 @@ class YoutubeManager():
     def add_video_to_watch_later(self, video_id):
         print('Adding video to playlist: {}'.format(video_id['title']))
         if not self.dry_run:
-            self.youtube.playlistItems().insert(
-                part='snippet',
-                body={
-                    'snippet': {
-                        'playlistId': 'WL',
-                        'resourceId': {
-                            'kind': 'youtube#video',
-                            'videoId': video_id['id'],
+            try:
+                self.youtube.playlistItems().insert(
+                    part='snippet',
+                    body={
+                        'snippet': {
+                            'playlistId': 'WL',
+                            'resourceId': {
+                                'kind': 'youtube#video',
+                                'videoId': video_id['id'],
+                            },
                         },
                     },
-                },
-            ).execute()
+                ).execute()
+            except googleapiclient.errors.HttpError as error:
+                if error.resp.status == 409:
+                    print('Already in list, skipping!')
+                else:
+                    raise
 
     def update(self, uploaded_after, only_allowed=False):
         channels = self.get_subscribed_channels()
