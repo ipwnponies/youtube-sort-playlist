@@ -8,8 +8,7 @@ help: ## Print help
 
 .PHONY: venv
 venv:  ## Create virtualenv
-	bin/venv-update venv= -p python3 venv install= -r requirements-dev.txt -r requirements.txt
-	venv/bin/pre-commit autoupdate
+	bin/venv-update venv= -p python3 venv install= -r requirements-dev.txt -r requirements.txt bootstrap-deps= -r requirements-bootstrap.txt
 	venv/bin/pre-commit install
 
 .PHONY: run
