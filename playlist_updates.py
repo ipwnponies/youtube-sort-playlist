@@ -304,12 +304,12 @@ def read_config():
     config_file.touch()
 
     with config_file.open('r') as config:
-        return yaml.load(config) or {}
+        return yaml.safe_load(config) or {}
 
 
 def write_config(config):
     with open(os.path.join(XDG_CACHE_HOME, 'youtube-sort-playlist', 'config.yaml'), 'w') as file:
-        file.write(yaml.dump(config, default_flow_style=False))
+        yaml.safe_dump(config, stream=file, explicit_start=True, default_flow_style=False)
 
 
 def parse_args():
