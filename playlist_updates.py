@@ -253,7 +253,7 @@ class YoutubeManager():
             else:
                 uploaded_after = arrow.now().shift(weeks=-2)
 
-        if not only_allowed:
+        if not only_allowed and not self.dry_run:
             unknown_channels = [i for i in channels if i['id'] not in auto_add]
             for channel in unknown_channels:
                 response = input('Want to auto-add videos from "{}"? y/n: '.format(channel['title']))
@@ -265,8 +265,9 @@ class YoutubeManager():
         for channel in tqdm(allowed_channels, unit='video'):
             self.add_channel_videos_watch_later(channel['id'], uploaded_after)
 
-        config['last_updated'] = arrow.now().format()
-        write_config(config)
+        if not self.dry_run:
+            config['last_updated'] = arrow.now().format()
+            write_config(config)
 
     def sort(self):
         '''Sort the 'Sort Watch Later' playlist.'''
