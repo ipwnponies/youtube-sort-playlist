@@ -24,6 +24,9 @@ from tqdm import tqdm
 from xdg import XDG_CACHE_HOME
 
 
+print = tqdm.write  # pylint: disable=invalid-name,redefined-builtin
+
+
 # The CLIENT_SECRETS_FILE variable specifies the name of a file that contains
 # the OAuth 2.0 information for this application, including its client_id and
 # client_secret. You can acquire an OAuth 2.0 client ID and client secret from
