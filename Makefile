@@ -15,6 +15,10 @@ venv:  ## Create virtualenv
 run: venv ## Run script
 	venv/bin/python playlist_updates.py
 
+.PHONY: test
+test:
+	venv/bin/mypy playlist_updates.py
+
 .PHONY: clean
 clean: ## Clean working directory
 	find . -iname '*.pyc' | xargs rm -f

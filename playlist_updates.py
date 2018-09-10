@@ -7,19 +7,19 @@ from collections import namedtuple
 from functools import lru_cache
 from functools import reduce
 from pathlib import Path
+from typing import Any
+from typing import Dict
+from typing import List
 
 import addict
 import arrow
 import googleapiclient.errors
 import httplib2
+import oauth2client
 import yaml
 from apiclient.discovery import build  # pylint: disable=import-error
 from isodate import parse_duration
 from isodate import strftime
-from oauth2client.client import flow_from_clientsecrets
-from oauth2client.file import Storage
-from oauth2client.tools import argparser
-from oauth2client.tools import run_flow
 from tqdm import tqdm
 from xdg import XDG_CACHE_HOME
 
@@ -63,28 +63,29 @@ YOUTUBE_API_SERVICE_NAME = 'youtube'
 YOUTUBE_API_VERSION = 'v3'
 
 VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
+JsonType = Dict[str, Any]
 
 
 class YoutubeManager():
-    def __init__(self, dry_run):
+    def __init__(self, dry_run: bool) -> None:
         self.youtube = self.get_youtube()
         self.dry_run = dry_run
 
     @staticmethod
-    def get_creds():
+    def get_creds() -> oauth2client.client.Credentials:
         '''Authorize client with OAuth2.'''
-        flow = flow_from_clientsecrets(
+        flow = oauth2client.client.flow_from_clientsecrets(
             CLIENT_SECRETS_FILE,
             message=MISSING_CLIENT_SECRETS_MESSAGE,
             scope=YOUTUBE_READ_WRITE_SCOPE,
         )
 
-        storage = Storage('{}-oauth2.json'.format(sys.argv[0]))
+        storage = oauth2client.file.Storage('{}-oauth2.json'.format(sys.argv[0]))
         credentials = storage.get()
 
         if credentials is None or credentials.invalid:
-            flags = argparser.parse_args()
-            credentials = run_flow(flow, storage, flags)
+            flags = oauth2client.tools.argparser.parse_args()
+            credentials = oauth2client.tools.run_flow(flow, storage, flags)
 
         return credentials
 
@@ -97,7 +98,7 @@ class YoutubeManager():
             http=creds.authorize(httplib2.Http()),
         )
 
-    def get_watchlater_playlist(self):
+    def get_watchlater_playlist(self) -> str:
         '''Get the id of the 'Sort Watch Later' playlist.
 
         The 'Sort Watch Later' playlist is regular playlist and is not the same as the magical one that all
@@ -107,9 +108,9 @@ class YoutubeManager():
         playlist_id = next(i['id'] for i in playlists['items'] if i['snippet']['title'] == 'Sort Watch Later')
         return playlist_id
 
-    def get_playlist_videos(self, watchlater_id):
+    def get_playlist_videos(self, watchlater_id: str) -> List[JsonType]:
         '''Returns list of playlistItems from Sort Watch Later playlist'''
-        result = []
+        result: List[Dict] = []
 
         request = self.youtube.playlistItems().list(
             part='snippet',
@@ -119,7 +120,7 @@ class YoutubeManager():
 
         # Iterate through all results pages
         while request:
-            response = request.execute()
+            response: Dict[str, Dict] = request.execute()
 
             result.extend(response['items'])
 
@@ -127,7 +128,7 @@ class YoutubeManager():
             request = self.youtube.playlistItems().list_next(request, response)
         return result
 
-    def get_video_info(self, playlist_videos):
+    def get_video_info(self, playlist_videos: List[JsonType]) -> Dict[str, VideoInfo]:
         '''Returns a dict of VideoInfo for each video
 
         The key is video id and the value is VideoInfo.
@@ -157,7 +158,7 @@ class YoutubeManager():
 
         return result
 
-    def sort_playlist(self, playlist_videos, video_infos):
+    def sort_playlist(self, playlist_videos: List[Dict], video_infos: JsonType) -> None:
         '''Sorts a playlist and groups videos by channel.'''
 
         def sort_key(playlist_item):
@@ -174,8 +175,8 @@ class YoutubeManager():
                 i['snippet']['position'] = index
                 self.youtube.playlistItems().update(part='snippet', body=i).execute()
 
-    def get_subscribed_channels(self):
-        channels = []
+    def get_subscribed_channels(self) -> List[Dict[str, str]]:
+        channels: List[Dict[str, str]] = []
         next_page_token = None
         request = self.youtube.subscriptions().list(
             part='snippet',
@@ -195,7 +196,7 @@ class YoutubeManager():
 
         return channels
 
-    def add_channel_videos_watch_later(self, channel, uploaded_after):
+    def add_channel_videos_watch_later(self, channel: str, uploaded_after: arrow) -> None:
         video_ids = []
         request = self.youtube.search().list(
             part='snippet',
@@ -220,7 +221,7 @@ class YoutubeManager():
         for video_id in video_ids:
             self.add_video_to_watch_later(video_id)
 
-    def add_video_to_watch_later(self, video_id):
+    def add_video_to_watch_later(self, video_id: JsonType) -> None:
         print('Adding video to playlist: {}'.format(video_id['title']))
         if not self.dry_run:
             try:
@@ -242,7 +243,7 @@ class YoutubeManager():
                 else:
                     raise
 
-    def update(self, uploaded_after, only_allowed=False):
+    def update(self, uploaded_after: arrow, only_allowed: bool = False) -> None:
         channels = self.get_subscribed_channels()
         config = read_config()
         auto_add = config.setdefault('auto_add', [])
@@ -269,7 +270,7 @@ class YoutubeManager():
             config['last_updated'] = arrow.now().format()
             write_config(config)
 
-    def sort(self):
+    def sort(self) -> None:
         '''Sort the 'Sort Watch Later' playlist.'''
         watchlater_id = self.get_watchlater_playlist()
         if not watchlater_id:
@@ -289,14 +290,14 @@ class YoutubeManager():
             )
 
     @staticmethod
-    def print_duration(video_infos):
+    def print_duration(video_infos: JsonType) -> None:
         total_duration = reduce(operator.add, [video.duration for video in video_infos.values()])
         print('\n' * 2)
         print('Total duration of playlist is {}'.format(strftime(total_duration, '%H:%M')))
 
 
 @lru_cache(1)
-def read_config():
+def read_config() -> JsonType:
     config_dir = Path(XDG_CACHE_HOME) / 'youtube-sort-playlist'
     config_dir.mkdir(parents=True, exist_ok=True)
 
@@ -307,12 +308,12 @@ def read_config():
         return yaml.safe_load(config) or {}
 
 
-def write_config(config):
+def write_config(config: JsonType) -> None:
     with open(os.path.join(XDG_CACHE_HOME, 'youtube-sort-playlist', 'config.yaml'), 'w') as file:
         yaml.safe_dump(config, stream=file, explicit_start=True, default_flow_style=False)
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.',
     )
@@ -352,7 +353,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def main() -> None:
     args = parse_args()
 
     youtube_manager = YoutubeManager(args.dry_run)
@@ -363,4 +364,4 @@ def main():
 
 
 if __name__ == '__main__':
-    exit(main())
+    main()
