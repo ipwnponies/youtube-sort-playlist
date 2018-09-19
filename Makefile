@@ -8,12 +8,16 @@ help: ## Print help
 
 .PHONY: venv
 venv:  ## Create virtualenv
-	bin/venv-update venv= -p python3 venv install= -r requirements-dev.txt -r requirements.txt bootstrap-deps= -r requirements-bootstrap.txt
+	bin/venv-update venv= -p python3 venv install= -r requirements-dev.txt -r requirements.txt bootstrap-deps= -r requirements-bootstrap.txt >/dev/null
 	venv/bin/pre-commit install
 
-.PHONY: run
-run: venv ## Run script
-	venv/bin/python playlist_updates.py
+.PHONY: update
+update: venv  ## Add new videos to Watch Later
+	venv/bin/python playlist_updates.py update -f
+
+.PHONY: sort
+sort: venv  ## Sort videos in 'Sort Watch Later' playlist
+	venv/bin/python playlist_updates.py sort --dry-run
 
 .PHONY: test
 test:
