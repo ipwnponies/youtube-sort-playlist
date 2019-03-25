@@ -196,27 +196,42 @@ class YoutubeManager():
 
         return channels
 
+    def get_channel_details(self, channel_id: str) -> addict.Dict:
+        request = self.youtube.channels().list(
+            part='contentDetails',
+            id=channel_id,
+        )
+
+        # Only 1 item, since queried by id
+        channel_details = addict.Dict(request.execute()['items'][0])
+        return channel_details
+
     def add_channel_videos_watch_later(self, channel: str, uploaded_after: arrow) -> None:
         video_ids = []
-        request = self.youtube.search().list(
+
+        channel_details = self.get_channel_details(channel)
+        uploaded_playlist = channel_details.contentDetails.relatedPlaylists.uploads
+
+        request = self.youtube.playlistItems().list(
             part='snippet',
-            channelId=channel,
-            type='video',
-            publishedAfter=uploaded_after,
+            playlistId=uploaded_playlist,
             maxResults=50,
         )
 
         while request:
             response = addict.Dict(request.execute())
             recent_videos = [
-                {'id': i.id.videoId, 'title': i.snippet.title}
+                {'id': i.snippet.resourceId.videoId, 'title': i.snippet.title}
                 for i in response['items']
+                if i.snippet.resourceId.kind == 'youtube#video'
+                and arrow.get(i.snippet.publishedAt) >= uploaded_after
             ]
 
             if not recent_videos:
                 break
+
             video_ids.extend(recent_videos)
-            request = self.youtube.search().list_next(request, response)
+            request = self.youtube.playlistItems().list_next(request, response)
 
         for video_id in video_ids:
             self.add_video_to_watch_later(video_id)
