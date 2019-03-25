@@ -17,7 +17,7 @@ update: venv  ## Add new videos to Watch Later
 
 .PHONY: sort
 sort: venv  ## Sort videos in 'Sort Watch Later' playlist
-	venv/bin/python playlist_updates.py sort --dry-run
+	venv/bin/python playlist_updates.py sort
 
 .PHONY: test
 test:
