@@ -54,7 +54,9 @@ with information from the {{ Cloud Console }}
 
 For more information about the client_secrets.json file format, please visit:
 https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
-""" % os.path.abspath(os.path.join(os.path.dirname(__file__), CLIENT_SECRETS_FILE,))
+""" % os.path.abspath(
+    os.path.join(os.path.dirname(__file__), CLIENT_SECRETS_FILE)
+)
 
 # This OAuth 2.0 access scope allows for full read/write access to the
 # authenticated user's account.
@@ -66,7 +68,7 @@ VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration']
 JsonType = Dict[str, Any]
 
 
-class YoutubeManager():
+class YoutubeManager:
     def __init__(self, dry_run: bool) -> None:
         self.youtube = self.get_youtube()
         self.dry_run = dry_run
@@ -75,9 +77,7 @@ class YoutubeManager():
     def get_creds() -> oauth2client.client.Credentials:
         '''Authorize client with OAuth2.'''
         flow = oauth2client.client.flow_from_clientsecrets(
-            CLIENT_SECRETS_FILE,
-            message=MISSING_CLIENT_SECRETS_MESSAGE,
-            scope=YOUTUBE_READ_WRITE_SCOPE,
+            CLIENT_SECRETS_FILE, message=MISSING_CLIENT_SECRETS_MESSAGE, scope=YOUTUBE_READ_WRITE_SCOPE
         )
 
         storage = oauth2client.file.Storage('{}-oauth2.json'.format(sys.argv[0]))
@@ -92,11 +92,7 @@ class YoutubeManager():
     def get_youtube(self):
         '''Get youtube data v3 object.'''
         creds = self.get_creds()
-        return build(
-            YOUTUBE_API_SERVICE_NAME,
-            YOUTUBE_API_VERSION,
-            http=creds.authorize(httplib2.Http()),
-        )
+        return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, http=creds.authorize(httplib2.Http()))
 
     def get_watchlater_playlist(self) -> str:
         '''Get the id of the 'Sort Watch Later' playlist.
@@ -112,11 +108,7 @@ class YoutubeManager():
         '''Returns list of playlistItems from Sort Watch Later playlist'''
         result: List[Dict] = []
 
-        request = self.youtube.playlistItems().list(
-            part='snippet',
-            playlistId=watchlater_id,
-            maxResults=50,
-        )
+        request = self.youtube.playlistItems().list(part='snippet', playlistId=watchlater_id, maxResults=50)
 
         # Iterate through all results pages
         while request:
@@ -141,11 +133,11 @@ class YoutubeManager():
             to_query = videos[:50]
             remaining = videos[50:]
 
-            response = self.youtube.videos().list(
-                part='snippet,contentDetails',
-                id=','.join(list(to_query)),
-                maxResults=50,
-            ).execute()
+            response = (
+                self.youtube.videos()
+                .list(part='snippet,contentDetails', id=','.join(list(to_query)), maxResults=50)
+                .execute()
+            )
 
             for i in response['items']:
                 video_id = i['id']
@@ -178,29 +170,18 @@ class YoutubeManager():
     def get_subscribed_channels(self) -> List[Dict[str, str]]:
         channels: List[Dict[str, str]] = []
         next_page_token = None
-        request = self.youtube.subscriptions().list(
-            part='snippet',
-            mine=True,
-            maxResults=50,
-            pageToken=next_page_token,
-        )
+        request = self.youtube.subscriptions().list(part='snippet', mine=True, maxResults=50, pageToken=next_page_token)
 
         while request:
             response = request.execute()
             response = addict.Dict(response)
-            channels.extend(
-                {'title': i.snippet.title, 'id': i.snippet.resourceId.channelId}
-                for i in response['items']
-            )
+            channels.extend({'title': i.snippet.title, 'id': i.snippet.resourceId.channelId} for i in response['items'])
             request = self.youtube.subscriptions().list_next(request, response)
 
         return channels
 
     def get_channel_details(self, channel_id: str) -> addict.Dict:
-        request = self.youtube.channels().list(
-            part='contentDetails',
-            id=channel_id,
-        )
+        request = self.youtube.channels().list(part='contentDetails', id=channel_id)
 
         # Only 1 item, since queried by id
         channel_details = addict.Dict(request.execute()['items'][0])
@@ -212,19 +193,14 @@ class YoutubeManager():
         channel_details = self.get_channel_details(channel)
         uploaded_playlist = channel_details.contentDetails.relatedPlaylists.uploads
 
-        request = self.youtube.playlistItems().list(
-            part='snippet',
-            playlistId=uploaded_playlist,
-            maxResults=50,
-        )
+        request = self.youtube.playlistItems().list(part='snippet', playlistId=uploaded_playlist, maxResults=50)
 
         while request:
             response = addict.Dict(request.execute())
             recent_videos = [
                 {'id': i.snippet.resourceId.videoId, 'title': i.snippet.title}
                 for i in response['items']
-                if i.snippet.resourceId.kind == 'youtube#video'
-                and arrow.get(i.snippet.publishedAt) >= uploaded_after
+                if i.snippet.resourceId.kind == 'youtube#video' and arrow.get(i.snippet.publishedAt) >= uploaded_after
             ]
 
             if not recent_videos:
@@ -245,11 +221,8 @@ class YoutubeManager():
                     body={
                         'snippet': {
                             'playlistId': 'WL',
-                            'resourceId': {
-                                'kind': 'youtube#video',
-                                'videoId': video_id['id'],
-                            },
-                        },
+                            'resourceId': {'kind': 'youtube#video', 'videoId': video_id['id']},
+                        }
                     },
                 ).execute()
             except googleapiclient.errors.HttpError as error:
@@ -301,7 +274,7 @@ class YoutubeManager():
             exit(
                 'Playlist is empty! '
                 "Did you remember to copy over Youtube's Watch Later "
-                'to your personal Sort Watch Later playlist?',
+                'to your personal Sort Watch Later playlist?'
             )
 
     @staticmethod
@@ -330,16 +303,13 @@ def write_config(config: JsonType) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.',
+        description='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.'
     )
 
     common_parser = argparse.ArgumentParser(add_help=False)
     common_parser.add_argument('--dry-run', action='store_true')
 
-    subparser = parser.add_subparsers(
-        title='sub-commands',
-        dest='subcommand',
-    )
+    subparser = parser.add_subparsers(title='sub-commands', dest='subcommand')
     subparser.add_parser(
         'sort',
         help="Sort 'Watch Later' playlist.",
@@ -353,16 +323,9 @@ def parse_args() -> argparse.Namespace:
         description='Update the watch later playlist with recent videos from subscribed channels.',
         parents=[common_parser],
     )
+    update_parser.add_argument('--since', help='Start date to filter videos by.', type=arrow.get)
     update_parser.add_argument(
-        '--since',
-        help='Start date to filter videos by.',
-        type=arrow.get,
-    )
-    update_parser.add_argument(
-        '-f',
-        '--only-allowed',
-        help='Auto add videos from known and allowed channels.',
-        action='store_true',
+        '-f', '--only-allowed', help='Auto add videos from known and allowed channels.', action='store_true'
     )
 
     return parser.parse_args()
