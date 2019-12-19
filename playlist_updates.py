@@ -15,7 +15,9 @@ import addict
 import arrow
 import googleapiclient.errors
 import httplib2
-import oauth2client
+import oauth2client.client
+import oauth2client.file
+import oauth2client.tools
 import yaml
 from apiclient.discovery import build  # pylint: disable=import-error
 from isodate import parse_duration
@@ -262,7 +264,7 @@ class YoutubeManager:
         '''Sort the 'Sort Watch Later' playlist.'''
         watchlater_id = self.get_watchlater_playlist()
         if not watchlater_id:
-            exit("Oh noes, you don't have a playlist named Sort Watch Later")
+            sys.exit("Oh noes, you don't have a playlist named Sort Watch Later")
 
         playlist_videos = self.get_playlist_videos(watchlater_id)
 
@@ -271,7 +273,7 @@ class YoutubeManager:
             self.sort_playlist(playlist_videos, video_infos)
             self.print_duration(video_infos)
         else:
-            exit(
+            sys.exit(
                 'Playlist is empty! '
                 "Did you remember to copy over Youtube's Watch Later "
                 'to your personal Sort Watch Later playlist?'
