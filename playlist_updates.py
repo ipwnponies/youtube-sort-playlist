@@ -15,7 +15,9 @@ import addict
 import arrow
 import googleapiclient.errors
 import httplib2
-import oauth2client
+import oauth2client.client
+import oauth2client.file
+import oauth2client.tools
 import yaml
 from apiclient.discovery import build  # pylint: disable=import-error
 from isodate import parse_duration
@@ -69,12 +71,12 @@ JsonType = Dict[str, Any]
 
 
 class YoutubeManager:
-    def __init__(self, dry_run: bool) -> None:
-        self.youtube = self.get_youtube()
+    def __init__(self, dry_run: bool, args: List[str]) -> None:
+        self.youtube = self.get_youtube(args)
         self.dry_run = dry_run
 
     @staticmethod
-    def get_creds() -> oauth2client.client.Credentials:
+    def get_creds(args: List[str]) -> oauth2client.client.Credentials:
         '''Authorize client with OAuth2.'''
         flow = oauth2client.client.flow_from_clientsecrets(
             CLIENT_SECRETS_FILE, message=MISSING_CLIENT_SECRETS_MESSAGE, scope=YOUTUBE_READ_WRITE_SCOPE
@@ -84,14 +86,14 @@ class YoutubeManager:
         credentials = storage.get()
 
         if credentials is None or credentials.invalid:
-            flags = oauth2client.tools.argparser.parse_args()
+            flags = oauth2client.tools.argparser.parse_args(args)
             credentials = oauth2client.tools.run_flow(flow, storage, flags)
 
         return credentials
 
-    def get_youtube(self):
+    def get_youtube(self, args: List[str]):
         '''Get youtube data v3 object.'''
-        creds = self.get_creds()
+        creds = self.get_creds(args)
         return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, http=creds.authorize(httplib2.Http()))
 
     def get_watchlater_playlist(self) -> str:
@@ -262,7 +264,7 @@ class YoutubeManager:
         '''Sort the 'Sort Watch Later' playlist.'''
         watchlater_id = self.get_watchlater_playlist()
         if not watchlater_id:
-            exit("Oh noes, you don't have a playlist named Sort Watch Later")
+            sys.exit("Oh noes, you don't have a playlist named Sort Watch Later")
 
         playlist_videos = self.get_playlist_videos(watchlater_id)
 
@@ -271,7 +273,7 @@ class YoutubeManager:
             self.sort_playlist(playlist_videos, video_infos)
             self.print_duration(video_infos)
         else:
-            exit(
+            sys.exit(
                 'Playlist is empty! '
                 "Did you remember to copy over Youtube's Watch Later "
                 'to your personal Sort Watch Later playlist?'
@@ -305,6 +307,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.'
     )
+    parser.add_argument('args', nargs=argparse.REMAINDER)
 
     common_parser = argparse.ArgumentParser(add_help=False)
     common_parser.add_argument('--dry-run', action='store_true')
@@ -334,7 +337,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    youtube_manager = YoutubeManager(args.dry_run)
+    youtube_manager = YoutubeManager(args.dry_run, args.args)
     if args.subcommand == 'sort':
         youtube_manager.sort()
     elif args.subcommand == 'update':
