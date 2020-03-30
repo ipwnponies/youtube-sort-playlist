@@ -244,15 +244,18 @@ class YoutubeManager:
             else:
                 uploaded_after = arrow.now().shift(weeks=-2)
 
+        allowed_channel_ids = {i['id'] for i in auto_add}
+
         if not only_allowed and not self.dry_run:
-            unknown_channels = [i for i in channels if i['id'] not in auto_add]
+            unknown_channels = [i for i in channels if i['id'] not in allowed_channel_ids]
             for channel in unknown_channels:
                 response = input('Want to auto-add videos from "{}"? y/n: '.format(channel['title']))
                 if response == 'y':
-                    auto_add.append(channel['id'])
+                    auto_add.append({'id': channel['id'], 'name': channel['id']})
+                    allowed_channel_ids.add(channel['id'])
             write_config(config)
 
-        allowed_channels = [i for i in channels if i['id'] in auto_add]
+        allowed_channels = [i for i in channels if i['id'] in allowed_channel_ids]
         for channel in tqdm(allowed_channels, unit='video'):
             self.add_channel_videos_watch_later(channel['id'], uploaded_after)
 
