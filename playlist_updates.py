@@ -222,7 +222,7 @@ class YoutubeManager:
                     part='snippet',
                     body={
                         'snippet': {
-                            'playlistId': 'WL',
+                            'playlistId': self.get_watchlater_playlist(),
                             'resourceId': {'kind': 'youtube#video', 'videoId': video_id['id']},
                         }
                     },
