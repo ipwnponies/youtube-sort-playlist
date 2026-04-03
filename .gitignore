@@ -92,3 +92,7 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
