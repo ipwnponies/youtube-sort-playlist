@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+      "make venv": "allow",
+      "make test": "allow",
+    },
+    "read": {
+      // Always require approval for sensitive files.
+      // Maybe even make these deny, if agent does not have direct need to read
+      "*.env": "ask",
+      "*oauth2.json": "ask",
+      "client_secrets.json": "ask",
+    },
+  },
+}
