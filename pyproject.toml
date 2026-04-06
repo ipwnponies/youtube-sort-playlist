@@ -1,27 +1,27 @@
 [project]
 name = "youtube-sort-playlist"
 version = "0.0.0"
-requires-python = "==3.9.*"
+requires-python = "~=3.9"
 dependencies = [
-    "addict==2.4.0",
-    "arrow==1.0.3",
-    "google-api-python-client==2.1.0",
-    "isodate==0.6.0",
-    "oauth2client==4.1.3",
-    "pyyaml==5.4.1",
-    "tqdm==4.59.0",
-    "xdg==5.0.1",
+    "addict",
+    "arrow",
+    "google-api-python-client",
+    "isodate",
+    "oauth2client",
+    "pyyaml",
+    "tqdm",
+    "xdg",
 ]
 
 [dependency-groups]
 dev = [
-    "flake8==3.9.0",
-    "ipython==7.22.0",
-    "mypy==0.900",
-    "pre-commit==2.11.1",
-    "pudb==2020.1",
-    "pylint==2.7.4",
-    "requirements-tools==2.0.0",
+    "flake8",
+    "ipython",
+    "mypy",
+    "pre-commit",
+    "pudb",
+    "pylint",
+    "requirements-tools",
 ]
 
 [tool.black]
