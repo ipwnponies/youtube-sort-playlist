@@ -1,8 +1,0 @@
-addict
-arrow
-google-api-python-client
-isodate
-oauth2client
-pyyaml
-tqdm
-xdg

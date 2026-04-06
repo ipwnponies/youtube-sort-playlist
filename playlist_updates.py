@@ -18,7 +18,7 @@ import httplib2
 import oauth2client.client
 import oauth2client.file
 import oauth2client.tools
-import yaml
+import yaml  # type: ignore
 from apiclient.discovery import build  # pylint: disable=import-error
 from isodate import parse_duration
 from isodate import strftime
@@ -189,7 +189,7 @@ class YoutubeManager:
         channel_details = addict.Dict(request.execute()['items'][0])
         return channel_details
 
-    def add_channel_videos_watch_later(self, channel: str, uploaded_after: arrow) -> None:
+    def add_channel_videos_watch_later(self, channel: str, uploaded_after: arrow.Arrow) -> None:
         video_ids = []
 
         channel_details = self.get_channel_details(channel)
@@ -233,7 +233,7 @@ class YoutubeManager:
                 else:
                     raise
 
-    def update(self, uploaded_after: arrow, only_allowed: bool = False) -> None:
+    def update(self, uploaded_after: arrow.Arrow, only_allowed: bool = False) -> None:
         channels = self.get_subscribed_channels()
         config = read_config()
         auto_add = config.setdefault('auto_add', [])
