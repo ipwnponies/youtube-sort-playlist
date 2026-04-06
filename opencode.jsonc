@@ -4,6 +4,7 @@
     "bash": {
       "make venv": "allow",
       "make test": "allow",
+      "uv lock": "allow",
     },
     "read": {
       // Always require approval for sensitive files.
