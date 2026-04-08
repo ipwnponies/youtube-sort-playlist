@@ -15,14 +15,20 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "flake8",
     "ipython",
     "mypy",
     "pre-commit",
     "pudb",
     "pylint",
+    "ruff",
     "requirements-tools",
 ]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
 
 [tool.black]
 line-length=120
@@ -44,3 +50,6 @@ exclude = '''
                      # the root of the project
 )
 '''
+
+[tool.mypy]
+ignore_missing_imports = true

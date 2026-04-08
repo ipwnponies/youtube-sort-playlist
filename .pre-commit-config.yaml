@@ -24,7 +24,6 @@ repos:
     -   id: fix-encoding-pragma
         args:
         - --remove
-    -   id: flake8
     -   id: forbid-new-submodules
     -   id: mixed-line-ending
     -   id: name-tests-test
@@ -37,6 +36,10 @@ repos:
     -   id: requirements-txt-fixer
     -   id: sort-simple-yaml
     -   id: trailing-whitespace
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.1
+    hooks:
+    -   id: ruff-check
 -   repo: https://github.com/asottile/reorder_python_imports
     rev: v1.6.1
     hooks:

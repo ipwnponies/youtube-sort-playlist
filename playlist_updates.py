@@ -77,12 +77,12 @@ class YoutubeManager:
 
     @staticmethod
     def get_creds(args: List[str]) -> oauth2client.client.Credentials:
-        '''Authorize client with OAuth2.'''
+        """Authorize client with OAuth2."""
         flow = oauth2client.client.flow_from_clientsecrets(
             CLIENT_SECRETS_FILE, message=MISSING_CLIENT_SECRETS_MESSAGE, scope=YOUTUBE_READ_WRITE_SCOPE
         )
 
-        storage = oauth2client.file.Storage('{}-oauth2.json'.format(sys.argv[0]))
+        storage = oauth2client.file.Storage(f'{sys.argv[0]}-oauth2.json')
         credentials = storage.get()
 
         if credentials is None or credentials.invalid:
@@ -92,22 +92,22 @@ class YoutubeManager:
         return credentials
 
     def get_youtube(self, args: List[str]):
-        '''Get youtube data v3 object.'''
+        """Get youtube data v3 object."""
         creds = self.get_creds(args)
         return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, http=creds.authorize(httplib2.Http()))
 
     def get_watchlater_playlist(self) -> str:
-        '''Get the id of the 'Sort Watch Later' playlist.
+        """Get the id of the 'Sort Watch Later' playlist.
 
         The 'Sort Watch Later' playlist is regular playlist and is not the same as the magical one that all
         youtube users have by default.
-        '''
+        """
         playlists = self.youtube.playlists().list(part='snippet', mine=True).execute()
         playlist_id = next(i['id'] for i in playlists['items'] if i['snippet']['title'] == 'Sort Watch Later')
         return playlist_id
 
     def get_playlist_videos(self, watchlater_id: str) -> List[JsonType]:
-        '''Returns list of playlistItems from Sort Watch Later playlist'''
+        """Returns list of playlistItems from Sort Watch Later playlist"""
         result: List[Dict] = []
 
         request = self.youtube.playlistItems().list(part='snippet', playlistId=watchlater_id, maxResults=50)
@@ -123,10 +123,10 @@ class YoutubeManager:
         return result
 
     def get_video_info(self, playlist_videos: List[JsonType]) -> Dict[str, VideoInfo]:
-        '''Returns a dict of VideoInfo for each video
+        """Returns a dict of VideoInfo for each video
 
         The key is video id and the value is VideoInfo.
-        '''
+        """
         result = {}
         videos = [i['snippet']['resourceId']['videoId'] for i in playlist_videos]
 
@@ -153,17 +153,17 @@ class YoutubeManager:
         return result
 
     def sort_playlist(self, playlist_videos: List[Dict], video_infos: JsonType) -> None:
-        '''Sorts a playlist and groups videos by channel.'''
+        """Sorts a playlist and groups videos by channel."""
 
         def sort_key(playlist_item):
-            '''Groups together videos from the same channel, sorted by date in ascending order.'''
+            """Groups together videos from the same channel, sorted by date in ascending order."""
             video_id = playlist_item['snippet']['resourceId']['videoId']
             channel_name, published_date, _ = video_infos[video_id]
-            return '{}-{}'.format(channel_name, published_date)
+            return f'{channel_name}-{published_date}'
 
         sorted_playlist = sorted(playlist_videos, key=sort_key)
         for index, i in enumerate(tqdm(sorted_playlist, unit='video')):
-            print('{} is being put in pos {}'.format(i['snippet']['title'], index))
+            print(f"{i['snippet']['title']} is being put in pos {index}")
 
             if not self.dry_run:
                 i['snippet']['position'] = index
@@ -215,7 +215,7 @@ class YoutubeManager:
             self.add_video_to_watch_later(video_id)
 
     def add_video_to_watch_later(self, video_id: JsonType) -> None:
-        print('Adding video to playlist: {}'.format(video_id['title']))
+        print(f"Adding video to playlist: {video_id['title']}")
         if not self.dry_run:
             try:
                 self.youtube.playlistItems().insert(
@@ -249,7 +249,7 @@ class YoutubeManager:
         if not only_allowed and not self.dry_run:
             unknown_channels = [i for i in channels if i['id'] not in allowed_channel_ids]
             for channel in unknown_channels:
-                response = input('Want to auto-add videos from "{}"? y/n: '.format(channel['title']))
+                response = input(f'Want to auto-add videos from "{channel["title"]}"? y/n: ')
                 if response == 'y':
                     auto_add.append({'id': channel['id'], 'name': channel['id']})
                     allowed_channel_ids.add(channel['id'])
@@ -264,7 +264,7 @@ class YoutubeManager:
             write_config(config)
 
     def sort(self) -> None:
-        '''Sort the 'Sort Watch Later' playlist.'''
+        """Sort the 'Sort Watch Later' playlist."""
         watchlater_id = self.get_watchlater_playlist()
         if not watchlater_id:
             sys.exit("Oh noes, you don't have a playlist named Sort Watch Later")
@@ -286,7 +286,7 @@ class YoutubeManager:
     def print_duration(video_infos: JsonType) -> None:
         total_duration = reduce(operator.add, [video.duration for video in video_infos.values()])
         print('\n' * 2)
-        print('Total duration of playlist is {}'.format(strftime(total_duration, '%H:%M')))
+        print(f"Total duration of playlist is {strftime(total_duration, '%H:%M')}")
 
 
 @lru_cache(1)
@@ -302,7 +302,7 @@ def read_config() -> JsonType:
 
 
 def write_config(config: JsonType) -> None:
-    with open(os.path.join(XDG_CACHE_HOME, 'youtube-sort-playlist', 'config.yaml'), 'w') as file:
+    with open(os.path.join(XDG_CACHE_HOME, 'youtube-sort-playlist', 'config.yaml'), 'w', encoding='utf-8') as file:
         yaml.safe_dump(config, stream=file, explicit_start=True, default_flow_style=False)
 
 
