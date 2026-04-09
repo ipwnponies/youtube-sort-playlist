@@ -25,7 +25,6 @@ from isodate import strftime
 from tqdm import tqdm
 from xdg import XDG_CACHE_HOME
 
-
 print = tqdm.write  # pylint: disable=invalid-name,redefined-builtin
 
 
