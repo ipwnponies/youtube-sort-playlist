@@ -42,10 +42,3 @@ repos:
     -   id: ruff-check
         args: [--fix]
     -   id: ruff-format
--   repo: local
-    hooks:
-    -   id: pylint
-        name: Pylint
-        entry: uv run pylint
-        language: system
-        types: [python]

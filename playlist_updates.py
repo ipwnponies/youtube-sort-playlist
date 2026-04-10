@@ -16,12 +16,12 @@ import oauth2client.client
 import oauth2client.file
 import oauth2client.tools
 import yaml  # type: ignore
-from apiclient.discovery import build  # pylint: disable=import-error
+from apiclient.discovery import build
 from isodate import parse_duration, strftime
 from tqdm import tqdm
 from xdg import XDG_CACHE_HOME
 
-print = tqdm.write  # pylint: disable=invalid-name,redefined-builtin
+print = tqdm.write
 
 
 # The CLIENT_SECRETS_FILE variable specifies the name of a file that contains

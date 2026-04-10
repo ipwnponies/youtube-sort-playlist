@@ -19,7 +19,6 @@ dev = [
     "mypy",
     "pre-commit",
     "pudb",
-    "pylint",
     "ruff",
     "requirements-tools",
 ]
