@@ -4,12 +4,9 @@ import operator
 import os
 import sys
 from collections import namedtuple
-from functools import lru_cache
-from functools import reduce
+from functools import lru_cache, reduce
 from pathlib import Path
-from typing import Any
-from typing import Dict
-from typing import List
+from typing import Any, Dict, List
 
 import addict
 import arrow
@@ -20,8 +17,7 @@ import oauth2client.file
 import oauth2client.tools
 import yaml  # type: ignore
 from apiclient.discovery import build  # pylint: disable=import-error
-from isodate import parse_duration
-from isodate import strftime
+from isodate import parse_duration, strftime
 from tqdm import tqdm
 from xdg import XDG_CACHE_HOME
 

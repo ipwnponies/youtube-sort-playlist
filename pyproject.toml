@@ -30,9 +30,6 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 
-[tool.ruff.lint.isort]
-force-single-line = true
-
 [tool.ruff.format]
 quote-style = "preserve"
 
