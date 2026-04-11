@@ -15,7 +15,7 @@ import httplib2
 import oauth2client.client
 import oauth2client.file
 import oauth2client.tools
-import yaml  # type: ignore
+import yaml
 from apiclient.discovery import build
 from isodate import parse_duration, strftime
 from tqdm import tqdm

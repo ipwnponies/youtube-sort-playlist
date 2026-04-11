@@ -21,6 +21,7 @@ dev = [
     "pudb",
     "ruff",
     "requirements-tools",
+    "types-PyYAML",
 ]
 
 [tool.ruff]
