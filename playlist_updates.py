@@ -182,8 +182,8 @@ class YoutubeManager:
         channel_details = addict.Dict(request.execute()['items'][0])
         return channel_details
 
-    def add_channel_videos_watch_later(self, channel: str, uploaded_after: arrow.Arrow) -> None:
-        video_ids = []
+    def add_channel_videos_watch_later(self, channel: str, uploaded_after: arrow.Arrow) -> List[JsonType]:
+        video_ids: List[JsonType] = []
 
         channel_details = self.get_channel_details(channel)
         uploaded_playlist = channel_details.contentDetails.relatedPlaylists.uploads
@@ -204,8 +204,7 @@ class YoutubeManager:
             video_ids.extend(recent_videos)
             request = self.youtube.playlistItems().list_next(request, response)
 
-        for video_id in video_ids:
-            self.add_video_to_watch_later(video_id)
+        return video_ids
 
     def add_video_to_watch_later(self, video_id: JsonType) -> None:
         print(f"Adding video to playlist: {video_id['title']}")
@@ -249,8 +248,12 @@ class YoutubeManager:
             write_config(config)
 
         allowed_channels = [i for i in channels if i['id'] in allowed_channel_ids]
-        for channel in tqdm(allowed_channels, unit='video'):
-            self.add_channel_videos_watch_later(channel['id'], uploaded_after)
+        videos_to_add: List[JsonType] = []
+        for channel in allowed_channels:
+            videos_to_add.extend(self.add_channel_videos_watch_later(channel['id'], uploaded_after))
+
+        for video_id in tqdm(videos_to_add, unit='video'):
+            self.add_video_to_watch_later(video_id)
 
         if not self.dry_run:
             config['last_updated'] = arrow.now().format()
