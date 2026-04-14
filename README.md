@@ -1,47 +1,77 @@
-# youtube-sort-playlist
+# 🎬 YouTube Sort Playlist
 
-Sorts and groups YouTube playlist entries by subscription.
+> A CLI tool to automate organizing a YouTube playlist.
 
-## Development
+## ✨ What it does
 
-Install `uv`, then sync the local environment and install hooks:
+- Adds recent uploads from your subscribed channels to your `Sort Watch Later` playlist
+- Sorts that playlist by channel and publish date
+
+## 🚀 Quick start
+
+### 1) Prerequisites
+
+- Python `~=3.9`
+- [`uv`](https://docs.astral.sh/uv/)
+- A YouTube Data API OAuth app with a `client_secrets.json` file in the project root
+
+### 2) Set up your local environment
 
 ```bash
 make venv
 ```
 
-Run autofixes across the repository:
-
-```bash
-make fix
-```
-
-Run non-mutating validation checks:
-
-```bash
-make check
-```
-
-`pre-commit` is the primary autofix entrypoint. `make fix` is just a convenience wrapper around
-`pre-commit run --all-files`.
-
-## Application Commands
-
-Add new videos to Watch Later:
+### 3) Add videos to `Sort Watch Later`
 
 ```bash
 make update
 ```
 
-Sort videos in `Sort Watch Later`:
+### 4) Sort the playlist
 
 ```bash
 make sort
 ```
 
-## Dependency Refresh
+## ⚙️ Usage details
 
-Refresh compatible dependencies and the lockfile with:
+Use the script directly for extra options:
+
+```bash
+uv run playlist_updates.py update --since 2026-01-01
+uv run playlist_updates.py update --dry-run -f
+uv run playlist_updates.py sort --dry-run
+```
+
+Notes:
+
+- `update` discovers subscriptions and can prompt to allow channels for auto-add
+- `-f/--only-allowed` skips prompts and only uses previously allowed channels
+- `--dry-run` prints actions without mutating playlists
+
+## 🗂️ Config and state
+
+The app stores config at:
+
+- `$XDG_CACHE_HOME/youtube-sort-playlist/config.yaml`
+
+It records allowed channels (`auto_add`) and `last_updated` timestamps.
+
+## 🛠️ Development
+
+Run autofixes:
+
+```bash
+make fix
+```
+
+Run checks:
+
+```bash
+make check
+```
+
+## 📦 Dependency refresh
 
 ```bash
 uv lock --upgrade
@@ -49,6 +79,3 @@ make venv
 make fix
 make check
 ```
-
-This project intentionally keeps its current Python compatibility floor. Runtime dependencies should
-only be upgraded as far as they can go without requiring application changes.
