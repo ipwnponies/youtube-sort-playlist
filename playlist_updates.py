@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 import argparse
+import asyncio
 import operator
 import os
 import sys
@@ -249,8 +250,8 @@ class YoutubeManager:
             write_config(config)
 
         allowed_channels = [i for i in channels if i['id'] in allowed_channel_ids]
-        for channel in tqdm(allowed_channels, unit='video'):
-            self.add_channel_videos_watch_later(channel['id'], uploaded_after)
+        if allowed_channels:
+            asyncio.run(self.add_channels_videos_watch_later(allowed_channels, uploaded_after))
 
         if not self.dry_run:
             config['last_updated'] = arrow.now().format()
@@ -280,6 +281,21 @@ class YoutubeManager:
         total_duration = reduce(operator.add, [video.duration for video in video_infos.values()])
         print('\n' * 2)
         print(f"Total duration of playlist is {strftime(total_duration, '%H:%M')}")
+
+    async def add_channels_videos_watch_later(
+        self, channels: List[Dict[str, str]], uploaded_after: arrow.Arrow
+    ) -> None:
+        tasks = [
+            asyncio.to_thread(
+                self.add_channel_videos_watch_later,
+                channel['id'],
+                uploaded_after,
+            )
+            for channel in channels
+        ]
+
+        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), unit='channel'):
+            await task
 
 
 @lru_cache(1)
