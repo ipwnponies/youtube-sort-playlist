@@ -294,7 +294,7 @@ class YoutubeManager:
             for channel in channels
         ]
 
-        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), unit='channel'):
+        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), unit='video'):
             await task
 
 
