@@ -1,6 +1,6 @@
 # 🎬 YouTube Sort Playlist
 
-> A small CLI to help keep a user-created YouTube playlist clean and grouped by channel.
+> A CLI tool to automate organizing a YouTube playlist.
 
 ## ✨ What it does
 
