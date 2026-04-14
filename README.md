@@ -1,12 +1,11 @@
 # 🎬 YouTube Sort Playlist
 
-> A small CLI to help keep a **Sort Watch Later** playlist clean and grouped by channel.
+> A small CLI to help keep a user-created YouTube playlist clean and grouped by channel.
 
 ## ✨ What it does
 
 - Adds recent uploads from your subscribed channels to your `Sort Watch Later` playlist
 - Sorts that playlist by channel and publish date
-- Stores lightweight local state for auto-add preferences and last update time
 
 ## 🚀 Quick start
 
@@ -72,8 +71,6 @@ Run checks:
 make check
 ```
 
-`pre-commit` is the primary autofix entrypoint; `make fix` wraps `pre-commit run --all-files`.
-
 ## 📦 Dependency refresh
 
 ```bash
@@ -82,6 +79,3 @@ make venv
 make fix
 make check
 ```
-
-This project intentionally keeps its Python compatibility floor. Runtime dependencies should only be
-upgraded as far as they can go without requiring application changes.
