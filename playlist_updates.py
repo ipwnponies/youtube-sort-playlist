@@ -6,7 +6,7 @@ import sys
 from collections import namedtuple
 from functools import lru_cache, reduce
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import addict
 import arrow
@@ -59,6 +59,10 @@ YOUTUBE_READ_WRITE_SCOPE = 'https://www.googleapis.com/auth/youtube'
 YOUTUBE_API_SERVICE_NAME = 'youtube'
 YOUTUBE_API_VERSION = 'v3'
 
+DAILY_QUOTA = 10_000
+INSERT_COST = 50
+MAX_INSERTS_PER_RUN = int(DAILY_QUOTA * 0.8 / INSERT_COST)  # 160
+
 VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
 JsonType = Dict[str, Any]
 
@@ -89,6 +93,7 @@ class YoutubeManager:
         creds = self.get_creds(args)
         return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, http=creds.authorize(httplib2.Http()))
 
+    @lru_cache(1)
     def get_watchlater_playlist(self) -> str:
         """Get the id of the 'Sort Watch Later' playlist.
 
@@ -182,8 +187,10 @@ class YoutubeManager:
         channel_details = addict.Dict(request.execute()['items'][0])
         return channel_details
 
-    def add_channel_videos_watch_later(self, channel: str, uploaded_after: arrow.Arrow) -> None:
-        video_ids = []
+    def fetch_channel_videos(
+        self, channel: str, uploaded_after: arrow.Arrow, uploaded_until: Optional[arrow.Arrow] = None
+    ) -> List[JsonType]:
+        videos = []
 
         channel_details = self.get_channel_details(channel)
         uploaded_playlist = channel_details.contentDetails.relatedPlaylists.uploads
@@ -192,20 +199,23 @@ class YoutubeManager:
 
         while request:
             response = addict.Dict(request.execute())
+            videos_on_page = [i for i in response['items'] if i.snippet.resourceId.kind == 'youtube#video']
             recent_videos = [
-                {'id': i.snippet.resourceId.videoId, 'title': i.snippet.title}
-                for i in response['items']
-                if i.snippet.resourceId.kind == 'youtube#video' and arrow.get(i.snippet.publishedAt) >= uploaded_after
+                {'id': i.snippet.resourceId.videoId, 'title': i.snippet.title, 'published_at': i.snippet.publishedAt}
+                for i in videos_on_page
+                if arrow.get(i.snippet.publishedAt) >= uploaded_after
+                and (uploaded_until is None or arrow.get(i.snippet.publishedAt) < uploaded_until)
             ]
 
-            if not recent_videos:
+            videos.extend(recent_videos)
+
+            # YouTube returns newest-first; stop when we've seen a video older than our window
+            if any(arrow.get(i.snippet.publishedAt) < uploaded_after for i in videos_on_page):
                 break
 
-            video_ids.extend(recent_videos)
             request = self.youtube.playlistItems().list_next(request, response)
 
-        for video_id in video_ids:
-            self.add_video_to_watch_later(video_id)
+        return videos
 
     def add_video_to_watch_later(self, video_id: JsonType) -> None:
         print(f"Adding video to playlist: {video_id['title']}")
@@ -226,7 +236,13 @@ class YoutubeManager:
                 else:
                     raise
 
-    def update(self, uploaded_after: arrow.Arrow, only_allowed: bool = False) -> None:
+    def update(
+        self,
+        uploaded_after: arrow.Arrow,
+        uploaded_until: Optional[arrow.Arrow] = None,
+        auto_batch: bool = False,
+        only_allowed: bool = False,
+    ) -> None:
         channels = self.get_subscribed_channels()
         config = read_config()
         auto_add = config.setdefault('auto_add', [])
@@ -249,11 +265,28 @@ class YoutubeManager:
             write_config(config)
 
         allowed_channels = [i for i in channels if i['id'] in allowed_channel_ids]
-        for channel in tqdm(allowed_channels, unit='video'):
-            self.add_channel_videos_watch_later(channel['id'], uploaded_after)
+        all_videos = []
+        for channel in tqdm(allowed_channels, unit='channel'):
+            channel_videos = self.fetch_channel_videos(channel['id'], uploaded_after, uploaded_until)
+            channel_videos.sort(key=lambda v: v['published_at'])
+            all_videos.extend(channel_videos)
+
+        effective_until = uploaded_until
+        if auto_batch and len(all_videos) > MAX_INSERTS_PER_RUN:
+            all_sorted_by_date = sorted(all_videos, key=lambda v: v['published_at'])
+            effective_until = arrow.get(all_sorted_by_date[MAX_INSERTS_PER_RUN]['published_at'])
+            all_videos = [v for v in all_videos if arrow.get(v['published_at']) < effective_until]
+            remaining = len(all_sorted_by_date) - len(all_videos)
+            print(
+                f'Batch incomplete: queuing {len(all_videos)} of {len(all_sorted_by_date)} videos'
+                f' through {effective_until}. {remaining} remaining.'
+            )
+
+        for video in tqdm(all_videos, unit='video'):
+            self.add_video_to_watch_later(video)
 
         if not self.dry_run:
-            config['last_updated'] = arrow.now().format()
+            config['last_updated'] = effective_until.format() if effective_until else arrow.now().format()
             write_config(config)
 
     def sort(self) -> None:
@@ -323,6 +356,9 @@ def parse_args() -> argparse.Namespace:
         parents=[common_parser],
     )
     update_parser.add_argument('--since', help='Start date to filter videos by.', type=arrow.get)
+    batch_group = update_parser.add_mutually_exclusive_group()
+    batch_group.add_argument('--until', help='End date to filter videos by.', type=arrow.get)
+    batch_group.add_argument('--auto-batch', action='store_true', help='Auto-chunk inserts to stay within API quota.')
     update_parser.add_argument(
         '-f', '--only-allowed', help='Auto add videos from known and allowed channels.', action='store_true'
     )
@@ -337,7 +373,7 @@ def main() -> None:
     if args.subcommand == 'sort':
         youtube_manager.sort()
     elif args.subcommand == 'update':
-        youtube_manager.update(args.since, args.only_allowed)
+        youtube_manager.update(args.since, args.until, args.auto_batch, args.only_allowed)
 
 
 if __name__ == '__main__':
