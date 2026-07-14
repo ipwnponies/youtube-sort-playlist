@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 import argparse
+import asyncio
 import operator
 import os
 import sys
@@ -62,6 +63,7 @@ YOUTUBE_API_VERSION = 'v3'
 DAILY_QUOTA = 10_000
 INSERT_COST = 50
 MAX_INSERTS_PER_RUN = int(DAILY_QUOTA * 0.8 / INSERT_COST)  # 160
+INSERT_CONCURRENCY = 10
 
 VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
 JsonType = Dict[str, Any]
@@ -217,6 +219,28 @@ class YoutubeManager:
 
         return videos
 
+    async def fetch_all_channels_videos(
+        self, channels: List[Dict[str, str]], uploaded_after: arrow.Arrow, uploaded_until: Optional[arrow.Arrow]
+    ) -> List[JsonType]:
+        """Fetch each channel's recent videos concurrently.
+
+        Fetching is a pure read with no ordering requirement, so channels are processed in parallel. A failure on
+        any channel aborts the whole batch: a partial channel set must never reach the insert phase, since that
+        would let `last_updated` advance past videos we never actually looked at.
+        """
+        tasks = [
+            asyncio.to_thread(self.fetch_channel_videos, channel['id'], uploaded_after, uploaded_until)
+            for channel in channels
+        ]
+
+        all_videos: List[JsonType] = []
+        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), unit='channel'):
+            channel_videos = await task
+            channel_videos.sort(key=lambda v: v['published_at'])
+            all_videos.extend(channel_videos)
+
+        return all_videos
+
     def add_video_to_watch_later(self, video_id: JsonType) -> None:
         print(f"Adding video to playlist: {video_id['title']}")
         if not self.dry_run:
@@ -235,6 +259,24 @@ class YoutubeManager:
                     print('Already in list, skipping!')
                 else:
                     raise
+
+    async def insert_videos_watch_later(self, videos: List[JsonType]) -> None:
+        """Insert videos concurrently, bounded to INSERT_CONCURRENCY in flight at once.
+
+        Insert order doesn't affect correctness: playlist position is set later by `sort`, not by insert order.
+        A hard failure on any video aborts the whole batch (in-flight siblings may finish or not, that's fine) so
+        that `update()` never mints `last_updated` for a partially-inserted batch; the next run retries the full
+        batch, tolerating re-inserts via the existing 409-skip handling above.
+        """
+        semaphore = asyncio.Semaphore(INSERT_CONCURRENCY)
+
+        async def insert_one(video: JsonType) -> None:
+            async with semaphore:
+                await asyncio.to_thread(self.add_video_to_watch_later, video)
+
+        tasks = [insert_one(video) for video in videos]
+        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), unit='video'):
+            await task
 
     def update(
         self,
@@ -265,11 +307,11 @@ class YoutubeManager:
             write_config(config)
 
         allowed_channels = [i for i in channels if i['id'] in allowed_channel_ids]
-        all_videos = []
-        for channel in tqdm(allowed_channels, unit='channel'):
-            channel_videos = self.fetch_channel_videos(channel['id'], uploaded_after, uploaded_until)
-            channel_videos.sort(key=lambda v: v['published_at'])
-            all_videos.extend(channel_videos)
+        all_videos = (
+            asyncio.run(self.fetch_all_channels_videos(allowed_channels, uploaded_after, uploaded_until))
+            if allowed_channels
+            else []
+        )
 
         effective_until = uploaded_until
         if auto_batch and len(all_videos) > MAX_INSERTS_PER_RUN:
@@ -282,8 +324,8 @@ class YoutubeManager:
                 f' through {effective_until}. {remaining} remaining.'
             )
 
-        for video in tqdm(all_videos, unit='video'):
-            self.add_video_to_watch_later(video)
+        if all_videos:
+            asyncio.run(self.insert_videos_watch_later(all_videos))
 
         if not self.dry_run:
             config['last_updated'] = effective_until.format() if effective_until else arrow.now().format()
