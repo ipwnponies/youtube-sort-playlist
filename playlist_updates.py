@@ -4,6 +4,7 @@ import asyncio
 import operator
 import os
 import sys
+import threading
 from collections import namedtuple
 from functools import lru_cache, reduce
 from pathlib import Path
@@ -71,8 +72,9 @@ JsonType = Dict[str, Any]
 
 class YoutubeManager:
     def __init__(self, dry_run: bool, args: List[str]) -> None:
-        self.youtube = self.get_youtube(args)
         self.dry_run = dry_run
+        self._credentials = self.get_creds(args)
+        self._thread_local = threading.local()
 
     @staticmethod
     def get_creds(args: List[str]) -> oauth2client.client.Credentials:
@@ -90,10 +92,20 @@ class YoutubeManager:
 
         return credentials
 
-    def get_youtube(self, args: List[str]):
-        """Get youtube data v3 object."""
-        creds = self.get_creds(args)
-        return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, http=creds.authorize(httplib2.Http()))
+    @property
+    def youtube(self):
+        """Thread-local youtube data v3 object.
+
+        httplib2.Http is not thread-safe: it keeps a single per-host connection cache, so sharing one
+        instance across the threads used for concurrent channel fetches/inserts causes requests to
+        interleave on the same socket (hangs, or worse, native heap corruption). Each thread lazily
+        builds and keeps its own client.
+        """
+        if not hasattr(self._thread_local, 'youtube'):
+            self._thread_local.youtube = build(
+                YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, http=self._credentials.authorize(httplib2.Http())
+            )
+        return self._thread_local.youtube
 
     @lru_cache(1)
     def get_watchlater_playlist(self) -> str:
