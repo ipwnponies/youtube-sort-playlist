@@ -8,7 +8,7 @@ import threading
 from collections import namedtuple
 from functools import lru_cache, reduce
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import addict
 import arrow
@@ -380,11 +380,10 @@ def write_config(config: JsonType) -> None:
         yaml.safe_dump(config, stream=file, explicit_start=True, default_flow_style=False)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args() -> Tuple[argparse.Namespace, List[str]]:
     parser = argparse.ArgumentParser(
         description='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.'
     )
-    parser.add_argument('args', nargs=argparse.REMAINDER)
 
     common_parser = argparse.ArgumentParser(add_help=False)
     common_parser.add_argument('--dry-run', action='store_true')
@@ -411,13 +410,17 @@ def parse_args() -> argparse.Namespace:
         '-f', '--only-allowed', help='Auto add videos from known and allowed channels.', action='store_true'
     )
 
-    return parser.parse_args()
+    # Anything this parser doesn't recognize (e.g. oauth2client's own --noauth_local_webserver) is passed
+    # through to oauth2client.tools.argparser in get_creds, rather than captured as a REMAINDER positional,
+    # which conflicts with subparsers whenever an option here takes a separate-token value (e.g. `--since X`
+    # gets misparsed as a second subcommand).
+    return parser.parse_known_args()
 
 
 def main() -> None:
-    args = parse_args()
+    args, oauth_args = parse_args()
 
-    youtube_manager = YoutubeManager(args.dry_run, args.args)
+    youtube_manager = YoutubeManager(args.dry_run, oauth_args)
     if args.subcommand == 'sort':
         youtube_manager.sort()
     elif args.subcommand == 'update':
