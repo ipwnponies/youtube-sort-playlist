@@ -64,7 +64,6 @@ YOUTUBE_API_VERSION = 'v3'
 DAILY_QUOTA = 10_000
 INSERT_COST = 50
 MAX_INSERTS_PER_RUN = int(DAILY_QUOTA * 0.8 / INSERT_COST)  # 160
-INSERT_CONCURRENCY = 10
 
 VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
 JsonType = Dict[str, Any]
@@ -272,23 +271,18 @@ class YoutubeManager:
                 else:
                     raise
 
-    async def insert_videos_watch_later(self, videos: List[JsonType]) -> None:
-        """Insert videos concurrently, bounded to INSERT_CONCURRENCY in flight at once.
+    def insert_videos_watch_later(self, videos: List[JsonType]) -> None:
+        """Insert videos one at a time.
 
-        Insert order doesn't affect correctness: playlist position is set later by `sort`, not by insert order.
-        A hard failure on any video aborts the whole batch (in-flight siblings may finish or not, that's fine) so
-        that `update()` never mints `last_updated` for a partially-inserted batch; the next run retries the full
-        batch, tolerating re-inserts via the existing 409-skip handling above.
+        Concurrent writes to the same playlist can trip YouTube API conflict responses unrelated to the
+        video actually being a duplicate, which the 409-skip handling below can't distinguish from a real
+        duplicate; inserting serially avoids that race. Insert order doesn't affect correctness either way:
+        playlist position is set later by `sort`, not by insert order. A hard failure on any video aborts
+        the whole batch so that `update()` never mints `last_updated` for a partially-inserted batch; the
+        next run retries the full batch, tolerating re-inserts via the existing 409-skip handling above.
         """
-        semaphore = asyncio.Semaphore(INSERT_CONCURRENCY)
-
-        async def insert_one(video: JsonType) -> None:
-            async with semaphore:
-                await asyncio.to_thread(self.add_video_to_watch_later, video)
-
-        tasks = [insert_one(video) for video in videos]
-        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), unit='video'):
-            await task
+        for video in tqdm(videos, unit='video'):
+            self.add_video_to_watch_later(video)
 
     def update(
         self,
@@ -337,7 +331,7 @@ class YoutubeManager:
             )
 
         if all_videos:
-            asyncio.run(self.insert_videos_watch_later(all_videos))
+            self.insert_videos_watch_later(all_videos)
 
         if not self.dry_run:
             config['last_updated'] = effective_until.format() if effective_until else arrow.now().format()
