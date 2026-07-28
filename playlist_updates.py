@@ -308,7 +308,7 @@ class YoutubeManager:
             for channel in unknown_channels:
                 response = input(f'Want to auto-add videos from "{channel["title"]}"? y/n: ')
                 if response == 'y':
-                    auto_add.append({'id': channel['id'], 'name': channel['id']})
+                    auto_add.append({'id': channel['id'], 'name': channel['title']})
                     allowed_channel_ids.add(channel['id'])
             write_config(config)
 
