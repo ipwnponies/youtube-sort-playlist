@@ -34,7 +34,7 @@ update-lock: ## Refresh the uv lockfile
 
 .PHONY: update
 update: venv  ## Add new videos to Watch Later
-	uv run playlist_updates.py update -f
+	uv run playlist_updates.py update -f --auto-batch
 
 .PHONY: sort
 sort: venv  ## Sort videos in 'Sort Watch Later' playlist
