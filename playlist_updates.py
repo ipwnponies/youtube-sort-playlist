@@ -367,7 +367,6 @@ class YoutubeManager:
         uploaded_after: Optional[arrow.Arrow],
         uploaded_until: Optional[arrow.Arrow] = None,
         auto_batch: bool = False,
-        only_allowed: bool = False,
     ) -> None:
         channels = self.get_subscribed_channels()
         config = read_config()
@@ -380,17 +379,9 @@ class YoutubeManager:
                 uploaded_after = arrow.now().shift(weeks=-2)
 
         allowed_channel_ids = {i['id'] for i in auto_add}
-
-        if not only_allowed and not self.dry_run:
-            unknown_channels = [i for i in channels if i['id'] not in allowed_channel_ids]
-            for channel in unknown_channels:
-                response = input(f'Want to auto-add videos from "{channel["title"]}"? y/n: ')
-                if response == 'y':
-                    auto_add.append({'id': channel['id'], 'name': channel['title']})
-                    allowed_channel_ids.add(channel['id'])
-            write_config(config)
-
         allowed_channels = [i for i in channels if i['id'] in allowed_channel_ids]
+        if not allowed_channels:
+            print('No channels in the allowlist; run "subscriptions add" to add some.')
         all_videos = (
             asyncio.run(self.fetch_all_channels_videos(allowed_channels, uploaded_after, uploaded_until))
             if allowed_channels
@@ -479,9 +470,6 @@ def update(
     since: Optional[str] = typer.Option(None, '--since', help='Start date to filter videos by.'),
     until: Optional[str] = typer.Option(None, '--until', help='End date to filter videos by.'),
     auto_batch: bool = typer.Option(False, '--auto-batch', help='Auto-chunk inserts to stay within API quota.'),
-    only_allowed: bool = typer.Option(
-        False, '-f', '--only-allowed', help='Auto add videos from known and allowed channels.'
-    ),
 ) -> None:
     """Add recent videos to watch later playlist."""
     if until and auto_batch:
@@ -498,7 +486,6 @@ def update(
         since_arrow,
         until_arrow,
         auto_batch,
-        only_allowed,
     )
 
 

@@ -39,15 +39,18 @@ Use the script directly for extra options:
 
 ```bash
 uv run playlist_updates.py update --since 2026-01-01
-uv run playlist_updates.py update --dry-run -f
+uv run playlist_updates.py update --dry-run
+uv run playlist_updates.py subscriptions add
+uv run playlist_updates.py subscriptions list
+uv run playlist_updates.py subscriptions remove
 uv run playlist_updates.py sort --dry-run
 ```
 
 Notes:
 
-- `update` discovers subscriptions and can prompt to allow channels for auto-add
-- `-f/--only-allowed` skips prompts and only uses previously allowed channels
-- `--dry-run` prints actions without mutating playlists
+- `update` only pulls videos from channels already in the `subscriptions` allowlist
+- `subscriptions add`/`remove` manage that allowlist interactively (fuzzy multi-select); `subscriptions list` shows it
+- `--dry-run` prints actions without mutating playlists or the allowlist
 
 ## 🗂️ Config and state
 
