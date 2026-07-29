@@ -22,6 +22,9 @@ from apiclient.discovery import build
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
 from isodate import parse_duration, strftime
+from rich.console import Console
+from rich.markup import escape
+from rich.table import Table
 from tqdm import tqdm
 from xdg import XDG_CACHE_HOME
 
@@ -224,6 +227,21 @@ class YoutubeManager:
             write_config(config)
 
         print(f"Added {len(selected)} channel(s): {', '.join(channel['title'] for channel in selected)}")
+
+    def list_subscriptions(self) -> None:
+        """Print the channels currently allowed to auto-add videos."""
+        config = read_config()
+        auto_add = config.get('auto_add', [])
+
+        if not auto_add:
+            print('No subscriptions.')
+            return
+
+        table = Table('Name', 'Channel ID')
+        for channel in auto_add:
+            table.add_row(escape(channel['name']), escape(channel['id']))
+
+        Console().print(table)
 
     def get_channel_details(self, channel_id: str) -> addict.Dict:
         request = self.youtube.channels().list(part='contentDetails', id=channel_id)
@@ -465,6 +483,13 @@ def subscriptions_add(ctx: typer.Context) -> None:
     """Interactively add newly-subscribed channels."""
     youtube_manager = YoutubeManager(ctx.obj)
     youtube_manager.add_subscriptions()
+
+
+@subscriptions_app.command('list')
+def subscriptions_list(ctx: typer.Context) -> None:
+    """List channels currently allowed to auto-add videos."""
+    youtube_manager = YoutubeManager(ctx.obj)
+    youtube_manager.list_subscriptions()
 
 
 if __name__ == '__main__':
