@@ -19,6 +19,8 @@ import oauth2client.tools
 import typer
 import yaml
 from apiclient.discovery import build
+from InquirerPy import inquirer
+from InquirerPy.base.control import Choice
 from isodate import parse_duration, strftime
 from tqdm import tqdm
 from xdg import XDG_CACHE_HOME
@@ -192,6 +194,36 @@ class YoutubeManager:
             request = self.youtube.subscriptions().list_next(request, response)
 
         return channels
+
+    def add_subscriptions(self) -> None:
+        """Interactively add newly-subscribed channels to the auto-add list."""
+        channels = self.get_subscribed_channels()
+        config = read_config()
+        auto_add = config.setdefault('auto_add', [])
+        known_ids = {i['id'] for i in auto_add}
+
+        candidates = [i for i in channels if i['id'] not in known_ids]
+        if not candidates:
+            print('No new channels to add.')
+            return
+
+        choices = [Choice(channel, name=channel['title']) for channel in candidates]
+        selected = inquirer.fuzzy(
+            message='Select channels to add:',
+            choices=choices,
+            multiselect=True,
+        ).execute()
+
+        if not selected:
+            print('Nothing selected.')
+            return
+
+        auto_add.extend({'id': channel['id'], 'name': channel['title']} for channel in selected)
+
+        if not self.dry_run:
+            write_config(config)
+
+        print(f"Added {len(selected)} channel(s): {', '.join(channel['title'] for channel in selected)}")
 
     def get_channel_details(self, channel_id: str) -> addict.Dict:
         request = self.youtube.channels().list(part='contentDetails', id=channel_id)
@@ -422,6 +454,17 @@ def update(
         auto_batch,
         only_allowed,
     )
+
+
+subscriptions_app = typer.Typer(help='Manage channels allowed to auto-add videos.')
+app.add_typer(subscriptions_app, name='subscriptions')
+
+
+@subscriptions_app.command('add')
+def subscriptions_add(ctx: typer.Context) -> None:
+    """Interactively add newly-subscribed channels."""
+    youtube_manager = YoutubeManager(ctx.obj)
+    youtube_manager.add_subscriptions()
 
 
 if __name__ == '__main__':
