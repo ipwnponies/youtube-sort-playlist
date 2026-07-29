@@ -70,13 +70,13 @@ JsonType = Dict[str, Any]
 
 
 class YoutubeManager:
-    def __init__(self, dry_run: bool, args: List[str]) -> None:
+    def __init__(self, dry_run: bool) -> None:
         self.dry_run = dry_run
-        self._credentials = self.get_creds(args)
+        self._credentials = self.get_creds()
         self._thread_local = threading.local()
 
     @staticmethod
-    def get_creds(args: List[str]) -> oauth2client.client.Credentials:
+    def get_creds() -> oauth2client.client.Credentials:
         """Authorize client with OAuth2."""
         flow = oauth2client.client.flow_from_clientsecrets(
             CLIENT_SECRETS_FILE, message=MISSING_CLIENT_SECRETS_MESSAGE, scope=YOUTUBE_READ_WRITE_SCOPE
@@ -86,7 +86,7 @@ class YoutubeManager:
         credentials = storage.get()
 
         if credentials is None or credentials.invalid:
-            flags = oauth2client.tools.argparser.parse_args(args)
+            flags = oauth2client.tools.argparser.parse_args([])
             credentials = oauth2client.tools.run_flow(flow, storage, flags)
 
         return credentials
@@ -391,7 +391,7 @@ def main(ctx: typer.Context, dry_run: bool = typer.Option(False, '--dry-run')) -
 @app.command()
 def sort(ctx: typer.Context) -> None:
     """Sort 'Watch Later' playlist."""
-    youtube_manager = YoutubeManager(ctx.obj, [])
+    youtube_manager = YoutubeManager(ctx.obj)
     youtube_manager.sort()
 
 
@@ -415,7 +415,7 @@ def update(
     except arrow.parser.ParserError as error:
         raise typer.BadParameter(str(error)) from error
 
-    youtube_manager = YoutubeManager(ctx.obj, [])
+    youtube_manager = YoutubeManager(ctx.obj)
     youtube_manager.update(
         since_arrow,
         until_arrow,
