@@ -1,5 +1,4 @@
 #! /usr/bin/env python
-import argparse
 import asyncio
 import operator
 import os
@@ -8,7 +7,7 @@ import threading
 from collections import namedtuple
 from functools import lru_cache, reduce
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import addict
 import arrow
@@ -17,6 +16,7 @@ import httplib2
 import oauth2client.client
 import oauth2client.file
 import oauth2client.tools
+import typer
 import yaml
 from apiclient.discovery import build
 from isodate import parse_duration, strftime
@@ -286,7 +286,7 @@ class YoutubeManager:
 
     def update(
         self,
-        uploaded_after: arrow.Arrow,
+        uploaded_after: Optional[arrow.Arrow],
         uploaded_until: Optional[arrow.Arrow] = None,
         auto_batch: bool = False,
         only_allowed: bool = False,
@@ -380,52 +380,49 @@ def write_config(config: JsonType) -> None:
         yaml.safe_dump(config, stream=file, explicit_start=True, default_flow_style=False)
 
 
-def parse_args() -> Tuple[argparse.Namespace, List[str]]:
-    parser = argparse.ArgumentParser(
-        description='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.'
+app = typer.Typer(help='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.')
+
+
+@app.callback()
+def main(ctx: typer.Context, dry_run: bool = typer.Option(False, '--dry-run')) -> None:
+    ctx.obj = dry_run
+
+
+@app.command()
+def sort(ctx: typer.Context) -> None:
+    """Sort 'Watch Later' playlist."""
+    youtube_manager = YoutubeManager(ctx.obj, [])
+    youtube_manager.sort()
+
+
+@app.command()
+def update(
+    ctx: typer.Context,
+    since: Optional[str] = typer.Option(None, '--since', help='Start date to filter videos by.'),
+    until: Optional[str] = typer.Option(None, '--until', help='End date to filter videos by.'),
+    auto_batch: bool = typer.Option(False, '--auto-batch', help='Auto-chunk inserts to stay within API quota.'),
+    only_allowed: bool = typer.Option(
+        False, '-f', '--only-allowed', help='Auto add videos from known and allowed channels.'
+    ),
+) -> None:
+    """Add recent videos to watch later playlist."""
+    if until and auto_batch:
+        raise typer.BadParameter('--until and --auto-batch are mutually exclusive.')
+
+    try:
+        since_arrow = arrow.get(since) if since else None
+        until_arrow = arrow.get(until) if until else None
+    except arrow.parser.ParserError as error:
+        raise typer.BadParameter(str(error)) from error
+
+    youtube_manager = YoutubeManager(ctx.obj, [])
+    youtube_manager.update(
+        since_arrow,
+        until_arrow,
+        auto_batch,
+        only_allowed,
     )
-
-    common_parser = argparse.ArgumentParser(add_help=False)
-    common_parser.add_argument('--dry-run', action='store_true')
-
-    subparser = parser.add_subparsers(title='sub-commands', dest='subcommand')
-    subparser.add_parser(
-        'sort',
-        help="Sort 'Watch Later' playlist.",
-        description="Sort the 'Sort Watch Later' playlist and group by channel.",
-        parents=[common_parser],
-    )
-
-    update_parser = subparser.add_parser(
-        'update',
-        help='Add recent videos to watch later playlist.',
-        description='Update the watch later playlist with recent videos from subscribed channels.',
-        parents=[common_parser],
-    )
-    update_parser.add_argument('--since', help='Start date to filter videos by.', type=arrow.get)
-    batch_group = update_parser.add_mutually_exclusive_group()
-    batch_group.add_argument('--until', help='End date to filter videos by.', type=arrow.get)
-    batch_group.add_argument('--auto-batch', action='store_true', help='Auto-chunk inserts to stay within API quota.')
-    update_parser.add_argument(
-        '-f', '--only-allowed', help='Auto add videos from known and allowed channels.', action='store_true'
-    )
-
-    # Anything this parser doesn't recognize (e.g. oauth2client's own --noauth_local_webserver) is passed
-    # through to oauth2client.tools.argparser in get_creds, rather than captured as a REMAINDER positional,
-    # which conflicts with subparsers whenever an option here takes a separate-token value (e.g. `--since X`
-    # gets misparsed as a second subcommand).
-    return parser.parse_known_args()
-
-
-def main() -> None:
-    args, oauth_args = parse_args()
-
-    youtube_manager = YoutubeManager(args.dry_run, oauth_args)
-    if args.subcommand == 'sort':
-        youtube_manager.sort()
-    elif args.subcommand == 'update':
-        youtube_manager.update(args.since, args.until, args.auto_batch, args.only_allowed)
 
 
 if __name__ == '__main__':
-    main()
+    app()
