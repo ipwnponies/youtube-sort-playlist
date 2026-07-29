@@ -243,6 +243,34 @@ class YoutubeManager:
 
         Console().print(table)
 
+    def remove_subscription(self) -> None:
+        """Interactively remove channels from the auto-add list."""
+        config = read_config()
+        auto_add = config.setdefault('auto_add', [])
+
+        if not auto_add:
+            print('No subscriptions to remove.')
+            return
+
+        choices = [Choice(channel, name=channel['name']) for channel in auto_add]
+        selected = inquirer.fuzzy(
+            message='Select channels to remove:',
+            choices=choices,
+            multiselect=True,
+        ).execute()
+
+        if not selected:
+            print('Nothing selected.')
+            return
+
+        removed_ids = {channel['id'] for channel in selected}
+        config['auto_add'] = [channel for channel in auto_add if channel['id'] not in removed_ids]
+
+        if not self.dry_run:
+            write_config(config)
+
+        print(f"Removed {len(selected)} channel(s): {', '.join(channel['name'] for channel in selected)}")
+
     def get_channel_details(self, channel_id: str) -> addict.Dict:
         request = self.youtube.channels().list(part='contentDetails', id=channel_id)
 
@@ -490,6 +518,13 @@ def subscriptions_list(ctx: typer.Context) -> None:
     """List channels currently allowed to auto-add videos."""
     youtube_manager = YoutubeManager(ctx.obj)
     youtube_manager.list_subscriptions()
+
+
+@subscriptions_app.command('remove')
+def subscriptions_remove(ctx: typer.Context) -> None:
+    """Interactively remove channels from the auto-add list."""
+    youtube_manager = YoutubeManager(ctx.obj)
+    youtube_manager.remove_subscription()
 
 
 if __name__ == '__main__':
