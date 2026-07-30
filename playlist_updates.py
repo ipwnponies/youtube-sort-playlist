@@ -5,7 +5,7 @@ import os
 import sys
 import threading
 from collections import namedtuple
-from functools import lru_cache, reduce
+from functools import cached_property, lru_cache, reduce
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,7 +19,12 @@ import oauth2client.tools
 import typer
 import yaml
 from apiclient.discovery import build
+from InquirerPy import inquirer
+from InquirerPy.base.control import Choice
 from isodate import parse_duration, strftime
+from rich.console import Console
+from rich.markup import escape
+from rich.table import Table
 from tqdm import tqdm
 from xdg import XDG_CACHE_HOME
 
@@ -72,7 +77,6 @@ JsonType = Dict[str, Any]
 class YoutubeManager:
     def __init__(self, dry_run: bool) -> None:
         self.dry_run = dry_run
-        self._credentials = self.get_creds()
         self._thread_local = threading.local()
 
     @staticmethod
@@ -90,6 +94,15 @@ class YoutubeManager:
             credentials = oauth2client.tools.run_flow(flow, storage, flags)
 
         return credentials
+
+    @cached_property
+    def _credentials(self) -> oauth2client.client.Credentials:
+        """Lazily-resolved OAuth credentials.
+
+        Only commands that actually hit the YouTube API need these; local-file-only commands (e.g.
+        `subscriptions list`/`remove`) must not trigger an OAuth flow just to construct a manager.
+        """
+        return self.get_creds()
 
     @property
     def youtube(self):
@@ -193,6 +206,79 @@ class YoutubeManager:
 
         return channels
 
+    def add_subscriptions(self) -> None:
+        """Interactively add newly-subscribed channels to the auto-add list."""
+        channels = self.get_subscribed_channels()
+        config = read_config()
+        auto_add = config.setdefault('auto_add', [])
+        known_ids = {i['id'] for i in auto_add}
+
+        candidates = [i for i in channels if i['id'] not in known_ids]
+        if not candidates:
+            print('No new channels to add.')
+            return
+
+        choices = [Choice(channel, name=channel['title']) for channel in candidates]
+        selected = inquirer.fuzzy(
+            message='Select channels to add:',
+            choices=choices,
+            multiselect=True,
+        ).execute()
+
+        if not selected:
+            print('Nothing selected.')
+            return
+
+        auto_add.extend({'id': channel['id'], 'name': channel['title']} for channel in selected)
+
+        if not self.dry_run:
+            write_config(config)
+
+        print(f"Added {len(selected)} channel(s): {', '.join(channel['title'] for channel in selected)}")
+
+    def list_subscriptions(self) -> None:
+        """Print the channels currently allowed to auto-add videos."""
+        config = read_config()
+        auto_add = config.get('auto_add', [])
+
+        if not auto_add:
+            print('No subscriptions.')
+            return
+
+        table = Table('Name', 'Channel ID')
+        for channel in auto_add:
+            table.add_row(escape(channel['name']), escape(channel['id']))
+
+        Console().print(table)
+
+    def remove_subscription(self) -> None:
+        """Interactively remove channels from the auto-add list."""
+        config = read_config()
+        auto_add = config.setdefault('auto_add', [])
+
+        if not auto_add:
+            print('No subscriptions to remove.')
+            return
+
+        choices = [Choice(channel, name=channel['name']) for channel in auto_add]
+        selected = inquirer.fuzzy(
+            message='Select channels to remove:',
+            choices=choices,
+            multiselect=True,
+        ).execute()
+
+        if not selected:
+            print('Nothing selected.')
+            return
+
+        removed_ids = {channel['id'] for channel in selected}
+        config['auto_add'] = [channel for channel in auto_add if channel['id'] not in removed_ids]
+
+        if not self.dry_run:
+            write_config(config)
+
+        print(f"Removed {len(selected)} channel(s): {', '.join(channel['name'] for channel in selected)}")
+
     def get_channel_details(self, channel_id: str) -> addict.Dict:
         request = self.youtube.channels().list(part='contentDetails', id=channel_id)
 
@@ -289,7 +375,6 @@ class YoutubeManager:
         uploaded_after: Optional[arrow.Arrow],
         uploaded_until: Optional[arrow.Arrow] = None,
         auto_batch: bool = False,
-        only_allowed: bool = False,
     ) -> None:
         channels = self.get_subscribed_channels()
         config = read_config()
@@ -302,17 +387,9 @@ class YoutubeManager:
                 uploaded_after = arrow.now().shift(weeks=-2)
 
         allowed_channel_ids = {i['id'] for i in auto_add}
-
-        if not only_allowed and not self.dry_run:
-            unknown_channels = [i for i in channels if i['id'] not in allowed_channel_ids]
-            for channel in unknown_channels:
-                response = input(f'Want to auto-add videos from "{channel["title"]}"? y/n: ')
-                if response == 'y':
-                    auto_add.append({'id': channel['id'], 'name': channel['title']})
-                    allowed_channel_ids.add(channel['id'])
-            write_config(config)
-
         allowed_channels = [i for i in channels if i['id'] in allowed_channel_ids]
+        if not allowed_channels:
+            print('No channels in the allowlist; run "subscriptions add" to add some.')
         all_videos = (
             asyncio.run(self.fetch_all_channels_videos(allowed_channels, uploaded_after, uploaded_until))
             if allowed_channels
@@ -401,9 +478,6 @@ def update(
     since: Optional[str] = typer.Option(None, '--since', help='Start date to filter videos by.'),
     until: Optional[str] = typer.Option(None, '--until', help='End date to filter videos by.'),
     auto_batch: bool = typer.Option(False, '--auto-batch', help='Auto-chunk inserts to stay within API quota.'),
-    only_allowed: bool = typer.Option(
-        False, '-f', '--only-allowed', help='Auto add videos from known and allowed channels.'
-    ),
 ) -> None:
     """Add recent videos to watch later playlist."""
     if until and auto_batch:
@@ -420,8 +494,32 @@ def update(
         since_arrow,
         until_arrow,
         auto_batch,
-        only_allowed,
     )
+
+
+subscriptions_app = typer.Typer(help='Manage channels allowed to auto-add videos.')
+app.add_typer(subscriptions_app, name='subscriptions')
+
+
+@subscriptions_app.command('add')
+def subscriptions_add(ctx: typer.Context) -> None:
+    """Interactively add newly-subscribed channels."""
+    youtube_manager = YoutubeManager(ctx.obj)
+    youtube_manager.add_subscriptions()
+
+
+@subscriptions_app.command('list')
+def subscriptions_list(ctx: typer.Context) -> None:
+    """List channels currently allowed to auto-add videos."""
+    youtube_manager = YoutubeManager(ctx.obj)
+    youtube_manager.list_subscriptions()
+
+
+@subscriptions_app.command('remove')
+def subscriptions_remove(ctx: typer.Context) -> None:
+    """Interactively remove channels from the auto-add list."""
+    youtube_manager = YoutubeManager(ctx.obj)
+    youtube_manager.remove_subscription()
 
 
 if __name__ == '__main__':
