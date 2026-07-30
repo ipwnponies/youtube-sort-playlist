@@ -5,7 +5,7 @@ import os
 import sys
 import threading
 from collections import namedtuple
-from functools import lru_cache, reduce
+from functools import cached_property, lru_cache, reduce
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -77,7 +77,6 @@ JsonType = Dict[str, Any]
 class YoutubeManager:
     def __init__(self, dry_run: bool) -> None:
         self.dry_run = dry_run
-        self._credentials = self.get_creds()
         self._thread_local = threading.local()
 
     @staticmethod
@@ -95,6 +94,15 @@ class YoutubeManager:
             credentials = oauth2client.tools.run_flow(flow, storage, flags)
 
         return credentials
+
+    @cached_property
+    def _credentials(self) -> oauth2client.client.Credentials:
+        """Lazily-resolved OAuth credentials.
+
+        Only commands that actually hit the YouTube API need these; local-file-only commands (e.g.
+        `subscriptions list`/`remove`) must not trigger an OAuth flow just to construct a manager.
+        """
+        return self.get_creds()
 
     @property
     def youtube(self):
