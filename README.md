@@ -39,11 +39,11 @@ Use the script directly for extra options:
 
 ```bash
 uv run playlist_updates.py update --since 2026-01-01
-uv run playlist_updates.py update --dry-run
+uv run playlist_updates.py --dry-run update
 uv run playlist_updates.py subscriptions add
 uv run playlist_updates.py subscriptions list
 uv run playlist_updates.py subscriptions remove
-uv run playlist_updates.py sort --dry-run
+uv run playlist_updates.py --dry-run sort
 ```
 
 Notes:
