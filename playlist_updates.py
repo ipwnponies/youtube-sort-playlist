@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 import asyncio
+import bisect
 import operator
 import os
 import sys
@@ -7,7 +8,7 @@ import threading
 from collections import namedtuple
 from functools import cached_property, lru_cache, reduce
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import addict
 import arrow
@@ -74,6 +75,64 @@ MAX_INSERTS_PER_RUN = int(DAILY_QUOTA * 0.8 / INSERT_COST)  # 160
 
 VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
 JsonType = Dict[str, Any]
+
+
+def longest_increasing_subsequence(values: List[int]) -> Set[int]:
+    """Return the indices of one longest strictly increasing subsequence of `values`.
+
+    Patience sorting (binary search over pile tops) gives the length in O(n log n); predecessor links then
+    reconstruct one actual subsequence, not just its length.
+    """
+    tails: List[int] = []  # tails[k]: smallest tail value of any increasing subsequence of length k + 1
+    tail_indices: List[int] = []
+    predecessors: Dict[int, Optional[int]] = {}  # parent pointers: index -> index of the previous element in its run
+    for index, value in enumerate(values):
+        length = bisect.bisect_left(tails, value)
+        predecessors[index] = tail_indices[length - 1] if length else None
+        if length == len(tails):
+            tails.append(value)
+            tail_indices.append(index)
+        else:
+            # Only each pile's top is kept, not the whole pile: LIS needs just the smallest tail per length.
+            tails[length] = value
+            tail_indices[length] = index
+
+    # Walk predecessor links back from the tail of the longest pile to collect the LIS indices.
+    result: Set[int] = set()
+    cursor = tail_indices[-1] if tail_indices else None
+    while cursor is not None:
+        result.add(cursor)
+        cursor = predecessors[cursor]
+    return result
+
+
+def plan_moves(current: List[str], target: List[str]) -> List[Tuple[str, int]]:
+    """Plan the fewest `(item_id, position)` moves that reorder `current` into `target`.
+
+    A move mirrors a playlistItems.update with a new position: the item is taken out and reinserted at `position`,
+    shifting everything in between. Every update costs 50 quota units, so items already in the right order relative
+    to each other (a longest increasing subsequence of their target ranks) stay put and only the rest move. Each
+    moved item is placed directly after its target predecessor, which leaves the whole list in target order.
+    """
+    # Rank transform: replace each id with its index in `target`, so ordering is plain integer comparison.
+    rank = {item_id: index for index, item_id in enumerate(target)}
+    current_ranks = [rank[item_id] for item_id in current]
+    # Items on a longest increasing run of ranks are already in correct relative order: they never move.
+    stable = {current[i] for i in longest_increasing_subsequence(current_ranks)}
+
+    # `order` replays each move locally, because positions are absolute and shift after every update;
+    # `moves` is the log sent to the API.
+    order = list(current)
+    moves: List[Tuple[str, int]] = []
+    # Visiting target in order means target[index - 1] is already placed, so inserting right after it is final.
+    for index, item_id in enumerate(target):
+        if item_id in stable:
+            continue
+        order.remove(item_id)
+        position = order.index(target[index - 1]) + 1 if index else 0
+        order.insert(position, item_id)
+        moves.append((item_id, position))
+    return moves
 
 
 class YoutubeManager:
@@ -186,7 +245,10 @@ class YoutubeManager:
         return result
 
     def sort_playlist(self, playlist_videos: List[Dict], video_infos: JsonType) -> None:
-        """Sorts a playlist and groups videos by channel."""
+        """Sorts a playlist and groups videos by channel.
+
+        Only out-of-place items are updated: each playlistItems.update costs 50 quota units.
+        """
 
         def sort_key(playlist_item):
             """Groups together videos from the same channel, sorted by date in ascending order."""
@@ -194,13 +256,18 @@ class YoutubeManager:
             channel_name, published_date, _ = video_infos[video_id]
             return f'{channel_name}-{published_date}'
 
-        sorted_playlist = sorted(playlist_videos, key=sort_key)
-        for index, i in enumerate(tqdm(sorted_playlist, unit='video')):
-            print(f"{i['snippet']['title']} is being put in pos {index}")
+        items_by_id = {i['id']: i for i in playlist_videos}
+        target = [i['id'] for i in sorted(playlist_videos, key=sort_key)]
+        moves = plan_moves([i['id'] for i in playlist_videos], target)
+        print(f'{len(moves)} of {len(playlist_videos)} videos need to move.')
+
+        for item_id, position in tqdm(moves, unit='video'):
+            item = items_by_id[item_id]
+            print(f"{item['snippet']['title']} is being put in pos {position}")
 
             if not self.dry_run:
-                i['snippet']['position'] = index
-                self.youtube.playlistItems().update(part='snippet', body=i).execute()
+                item['snippet']['position'] = position
+                self.youtube.playlistItems().update(part='snippet', body=item).execute()
 
     def get_subscribed_channels(self) -> List[Dict[str, str]]:
         channels: List[Dict[str, str]] = []
