@@ -72,6 +72,8 @@ SORT_PLAYLIST_TITLE = 'Sort Watch Later'
 DAILY_QUOTA = 10_000
 INSERT_COST = 50
 MAX_INSERTS_PER_RUN = int(DAILY_QUOTA * 0.8 / INSERT_COST)  # 160
+# Newest uploads are left for the next run: covers videos published mid-run and YouTube listing uploads late.
+PUBLISH_DELAY_HOURS = 3
 
 VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
 JsonType = Dict[str, Any]
@@ -479,6 +481,11 @@ class YoutubeManager:
         # `cached_property` has no lock, so a concurrent first resolution could run the OAuth flow more than once.
         self.get_watchlater_playlist()
 
+        # Fetch only up to a point safely in the past and reuse it as the new watermark: the held-back window is
+        # covered by the next run instead of being skipped (videos published mid-run, or listed late by YouTube).
+        if uploaded_until is None:
+            uploaded_until = arrow.now().shift(hours=-PUBLISH_DELAY_HOURS)
+
         channels = self.get_subscribed_channels()
         config = read_config()
         auto_add = config.setdefault('auto_add', [])
@@ -488,6 +495,12 @@ class YoutubeManager:
                 uploaded_after = arrow.get(config['last_updated'])
             else:
                 uploaded_after = arrow.now().shift(weeks=-2)
+
+        if uploaded_until <= uploaded_after:
+            # Run again within the delay window (or --until before the watermark): nothing new is safe to fetch yet,
+            # and writing uploaded_until would move the watermark backwards.
+            print(f'Nothing to fetch before {uploaded_until}; last run already covered up to {uploaded_after}.')
+            return
 
         allowed_channel_ids = {i['id'] for i in auto_add}
         allowed_channels = [i for i in channels if i['id'] in allowed_channel_ids]
@@ -514,7 +527,7 @@ class YoutubeManager:
             self.insert_videos_watch_later(all_videos)
 
         if not self.dry_run:
-            config['last_updated'] = effective_until.format() if effective_until else arrow.now().format()
+            config['last_updated'] = effective_until.format()
             write_config(config)
 
     def sort(self) -> None:
