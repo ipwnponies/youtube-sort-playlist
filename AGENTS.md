@@ -86,6 +86,7 @@ path constants / config functions so no real user file is touched.
 - `'Sort Watch Later'` is a **regular user-created playlist**, distinct from
   YouTube's built-in "Watch Later" — the code asserts this distinction, it
   does not attempt to touch the built-in one.
+  `update` (dry run included) looks it up first and exits before fetching if missing.
 - `read_config()` and `get_watchlater_playlist()` are both `@lru_cache(1)`:
   config is read from disk once per process and the in-memory dict is
   mutated in place thereafter (`write_config` doesn't invalidate the cache,
