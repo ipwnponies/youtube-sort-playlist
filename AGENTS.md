@@ -11,7 +11,8 @@ make venv       # uv sync (dev group, --no-install-project) + install pre-commit
 make fix        # pre-commit run --all-files (ruff check --fix, ruff format, hygiene hooks)
 make lint       # ruff check . (no edits)
 make typecheck  # mypy playlist_updates.py
-make check      # lint + typecheck, non-mutating
+make test       # stdlib unittest suite in tests/ (API mocked, no network)
+make check      # lint + typecheck + test, non-mutating
 make update     # venv, then: uv run playlist_updates.py update --auto-batch
 make sort       # venv, then: uv run playlist_updates.py sort
 make update-lock  # uv lock
@@ -27,7 +28,9 @@ Note: `--dry-run` is a top-level option (defined on the Typer callback), so it
 must precede the subcommand: `playlist_updates.py --dry-run update`, not
 `update --dry-run`.
 
-No test suite exists — `make test` is an intentional no-op placeholder.
+Tests use stdlib `unittest` + `unittest.mock` (no pytest). They fake the API by
+setting `manager._thread_local.youtube` to a `MagicMock` and patch module-level
+path constants / config functions so no real user file is touched.
 
 ## Architecture
 
@@ -86,9 +89,9 @@ No test suite exists — `make test` is an intentional no-op placeholder.
 - `read_config()` and `get_watchlater_playlist()` are both `@lru_cache(1)`:
   config is read from disk once per process and the in-memory dict is
   mutated in place thereafter (`write_config` doesn't invalidate the cache,
-  it doesn't need to — same dict object). The `if not watchlater_id` guard in
-  `sort()` is dead code: the lookup raises `StopIteration` before it could
-  ever return falsy.
+  it doesn't need to — same dict object).
+  `get_watchlater_playlist` pages through all playlists (`playlists.list`
+  defaults to 5 per page) and `sys.exit`s if none is titled `SORT_PLAYLIST_TITLE`.
 
 ## Code style
 

@@ -66,6 +66,8 @@ YOUTUBE_READ_WRITE_SCOPE = 'https://www.googleapis.com/auth/youtube'
 YOUTUBE_API_SERVICE_NAME = 'youtube'
 YOUTUBE_API_VERSION = 'v3'
 
+SORT_PLAYLIST_TITLE = 'Sort Watch Later'
+
 DAILY_QUOTA = 10_000
 INSERT_COST = 50
 MAX_INSERTS_PER_RUN = int(DAILY_QUOTA * 0.8 / INSERT_COST)  # 160
@@ -124,11 +126,18 @@ class YoutubeManager:
         """Get the id of the 'Sort Watch Later' playlist.
 
         The 'Sort Watch Later' playlist is regular playlist and is not the same as the magical one that all
-        youtube users have by default.
+        youtube users have by default. Exits if the playlist doesn't exist.
         """
-        playlists = self.youtube.playlists().list(part='snippet', mine=True).execute()
-        playlist_id = next(i['id'] for i in playlists['items'] if i['snippet']['title'] == 'Sort Watch Later')
-        return playlist_id
+        # playlists.list returns 5 results per page by default, so page through all of them.
+        request = self.youtube.playlists().list(part='snippet', mine=True, maxResults=50)
+        while request:
+            response = request.execute()
+            for playlist in response['items']:
+                if playlist['snippet']['title'] == SORT_PLAYLIST_TITLE:
+                    return playlist['id']
+            request = self.youtube.playlists().list_next(request, response)
+
+        sys.exit(f"Oh noes, you don't have a playlist named {SORT_PLAYLIST_TITLE}")
 
     def get_playlist_videos(self, watchlater_id: str) -> List[JsonType]:
         """Returns list of playlistItems from Sort Watch Later playlist"""
@@ -417,9 +426,6 @@ class YoutubeManager:
     def sort(self) -> None:
         """Sort the 'Sort Watch Later' playlist."""
         watchlater_id = self.get_watchlater_playlist()
-        if not watchlater_id:
-            sys.exit("Oh noes, you don't have a playlist named Sort Watch Later")
-
         playlist_videos = self.get_playlist_videos(watchlater_id)
 
         if playlist_videos:
