@@ -10,7 +10,7 @@ import arrow
 import yaml
 
 import playlist_updates
-from playlist_updates import VideoInfo, YoutubeManager, plan_moves
+from playlist_updates import YoutubeManager, plan_moves
 
 
 def manager_with_fake_api(dry_run=False):
@@ -327,12 +327,7 @@ class PrintDurationTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_total_over_a_day_keeps_the_days(self):
-        YoutubeManager.print_duration(
-            {
-                'v1': VideoInfo('c', 'd', timedelta(hours=20)),
-                'v2': VideoInfo('c', 'd', timedelta(hours=10, minutes=5, seconds=59)),
-            }
-        )
+        YoutubeManager.print_duration({'v1': timedelta(hours=20), 'v2': timedelta(hours=10, minutes=5, seconds=59)})
 
         self.print.assert_called_with('Total duration of playlist is a day 6 hours and 5 minutes')
 
