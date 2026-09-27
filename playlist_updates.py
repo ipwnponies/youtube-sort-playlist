@@ -10,7 +10,7 @@ from collections import namedtuple
 from datetime import timedelta
 from functools import cached_property, lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 import addict
 import arrow
@@ -48,20 +48,20 @@ CLIENT_SECRETS_FILE = 'client_secrets.json'
 
 # This variable defines a message to display if the CLIENT_SECRETS_FILE is
 # missing.
-MISSING_CLIENT_SECRETS_MESSAGE = """
+MISSING_CLIENT_SECRETS_MESSAGE = f"""
 WARNING: Please configure OAuth 2.0
 
 To make this sample run you will need to populate the client_secrets.json file
 found at:
 
-   %s
+   {os.path.abspath(os.path.join(os.path.dirname(__file__), CLIENT_SECRETS_FILE))}
 
-with information from the {{ Cloud Console }}
-{{ https://cloud.google.com/console }}
+with information from the {{{{ Cloud Console }}}}
+{{{{ https://cloud.google.com/console }}}}
 
 For more information about the client_secrets.json file format, please visit:
 https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
-""" % os.path.abspath(os.path.join(os.path.dirname(__file__), CLIENT_SECRETS_FILE))
+"""
 
 APP_NAME = 'youtube-sort-playlist'
 CONFIG_FILE = xdg_cache_home() / APP_NAME / 'config.yaml'
@@ -81,18 +81,18 @@ MAX_INSERTS_PER_RUN = int(DAILY_QUOTA * 0.8 / INSERT_COST)  # 160
 PUBLISH_DELAY_HOURS = 3
 
 VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
-JsonType = Dict[str, Any]
+JsonType = dict[str, Any]
 
 
-def longest_increasing_subsequence(values: List[int]) -> Set[int]:
+def longest_increasing_subsequence(values: list[int]) -> set[int]:
     """Return the indices of one longest strictly increasing subsequence of `values`.
 
     Patience sorting (binary search over pile tops) gives the length in O(n log n); predecessor links then
     reconstruct one actual subsequence, not just its length.
     """
-    tails: List[int] = []  # tails[k]: smallest tail value of any increasing subsequence of length k + 1
-    tail_indices: List[int] = []
-    predecessors: Dict[int, Optional[int]] = {}  # parent pointers: index -> index of the previous element in its run
+    tails: list[int] = []  # tails[k]: smallest tail value of any increasing subsequence of length k + 1
+    tail_indices: list[int] = []
+    predecessors: dict[int, int | None] = {}  # parent pointers: index -> index of the previous element in its run
     for index, value in enumerate(values):
         length = bisect.bisect_left(tails, value)
         predecessors[index] = tail_indices[length - 1] if length else None
@@ -105,7 +105,7 @@ def longest_increasing_subsequence(values: List[int]) -> Set[int]:
             tail_indices[length] = index
 
     # Walk predecessor links back from the tail of the longest pile to collect the LIS indices.
-    result: Set[int] = set()
+    result: set[int] = set()
     cursor = tail_indices[-1] if tail_indices else None
     while cursor is not None:
         result.add(cursor)
@@ -113,7 +113,7 @@ def longest_increasing_subsequence(values: List[int]) -> Set[int]:
     return result
 
 
-def plan_moves(current: List[str], target: List[str]) -> List[Tuple[str, int]]:
+def plan_moves(current: list[str], target: list[str]) -> list[tuple[str, int]]:
     """Plan the fewest `(item_id, position)` moves that reorder `current` into `target`.
 
     A move mirrors a playlistItems.update with a new position: the item is taken out and reinserted at `position`,
@@ -130,7 +130,7 @@ def plan_moves(current: List[str], target: List[str]) -> List[Tuple[str, int]]:
     # `order` replays each move locally, because positions are absolute and shift after every update;
     # `moves` is the log sent to the API.
     order = list(current)
-    moves: List[Tuple[str, int]] = []
+    moves: list[tuple[str, int]] = []
     # Visiting target in order means target[index - 1] is already placed, so inserting right after it is final.
     for index, item_id in enumerate(target):
         if item_id in stable:
@@ -222,9 +222,9 @@ class YoutubeManager:
 
         sys.exit(f"Oh noes, you don't have a playlist named {SORT_PLAYLIST_TITLE}")
 
-    def get_playlist_videos(self, watchlater_id: str) -> List[JsonType]:
+    def get_playlist_videos(self, watchlater_id: str) -> list[JsonType]:
         """Returns list of playlistItems from Sort Watch Later playlist"""
-        result: List[Dict] = []
+        result: list[dict] = []
 
         request = self.youtube.playlistItems().list(
             part='snippet,contentDetails', playlistId=watchlater_id, maxResults=50
@@ -232,7 +232,7 @@ class YoutubeManager:
 
         # Iterate through all results pages
         while request:
-            response: Dict[str, Dict] = request.execute()
+            response: dict[str, dict] = request.execute()
 
             result.extend(response['items'])
 
@@ -240,7 +240,7 @@ class YoutubeManager:
             request = self.youtube.playlistItems().list_next(request, response)
         return result
 
-    def get_video_info(self, playlist_videos: List[JsonType]) -> Dict[str, VideoInfo]:
+    def get_video_info(self, playlist_videos: list[JsonType]) -> dict[str, VideoInfo]:
         """Returns a dict of VideoInfo for each video
 
         The key is video id and the value is VideoInfo.
@@ -270,7 +270,7 @@ class YoutubeManager:
 
         return result
 
-    def sort_playlist(self, playlist_videos: List[JsonType]) -> None:
+    def sort_playlist(self, playlist_videos: list[JsonType]) -> None:
         """Sorts a playlist and groups videos by channel.
 
         The sort key comes from the playlist items themselves (uploader channel, then publish date). Entries missing
@@ -279,7 +279,7 @@ class YoutubeManager:
         is reordered. Only out-of-place items are updated, since each playlistItems.update costs 50 quota units.
         """
 
-        def sort_key(playlist_item: JsonType) -> Tuple[bool, str, str]:
+        def sort_key(playlist_item: JsonType) -> tuple[bool, str, str]:
             """Unavailable entries first, then videos grouped by channel, sorted by date in ascending order."""
             if not is_sortable(playlist_item):
                 return (False, '', '')
@@ -306,8 +306,8 @@ class YoutubeManager:
                 item['snippet']['position'] = position
                 self.youtube.playlistItems().update(part='snippet', body=item).execute()
 
-    def get_subscribed_channels(self) -> List[Dict[str, str]]:
-        channels: List[Dict[str, str]] = []
+    def get_subscribed_channels(self) -> list[dict[str, str]]:
+        channels: list[dict[str, str]] = []
         next_page_token = None
         request = self.youtube.subscriptions().list(part='snippet', mine=True, maxResults=50, pageToken=next_page_token)
 
@@ -400,8 +400,8 @@ class YoutubeManager:
         return channel_details
 
     def fetch_channel_videos(
-        self, channel: str, uploaded_after: arrow.Arrow, uploaded_until: Optional[arrow.Arrow] = None
-    ) -> List[JsonType]:
+        self, channel: str, uploaded_after: arrow.Arrow, uploaded_until: arrow.Arrow | None = None
+    ) -> list[JsonType]:
         videos = []
 
         channel_details = self.get_channel_details(channel)
@@ -430,8 +430,8 @@ class YoutubeManager:
         return videos
 
     async def fetch_all_channels_videos(
-        self, channels: List[Dict[str, str]], uploaded_after: arrow.Arrow, uploaded_until: Optional[arrow.Arrow]
-    ) -> List[JsonType]:
+        self, channels: list[dict[str, str]], uploaded_after: arrow.Arrow, uploaded_until: arrow.Arrow | None
+    ) -> list[JsonType]:
         """Fetch each channel's recent videos concurrently.
 
         Fetching is a pure read with no ordering requirement, so channels are processed in parallel. A failure on
@@ -443,7 +443,7 @@ class YoutubeManager:
             for channel in channels
         ]
 
-        all_videos: List[JsonType] = []
+        all_videos: list[JsonType] = []
         for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), unit='channel'):
             channel_videos = await task
             channel_videos.sort(key=lambda v: v['published_at'])
@@ -470,7 +470,7 @@ class YoutubeManager:
                 else:
                     raise
 
-    def insert_videos_watch_later(self, videos: List[JsonType]) -> None:
+    def insert_videos_watch_later(self, videos: list[JsonType]) -> None:
         """Insert videos one at a time.
 
         Concurrent writes to the same playlist can trip YouTube API conflict responses unrelated to the
@@ -485,8 +485,8 @@ class YoutubeManager:
 
     def update(
         self,
-        uploaded_after: Optional[arrow.Arrow],
-        uploaded_until: Optional[arrow.Arrow] = None,
+        uploaded_after: arrow.Arrow | None,
+        uploaded_until: arrow.Arrow | None = None,
         auto_batch: bool = False,
     ) -> None:
         # Inserts need the playlist; find out before spending quota on fetches or advancing the watermark. Dry runs
@@ -592,7 +592,7 @@ def _write_yaml_atomically(path: Path, data: JsonType) -> None:
     """
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
-        mode: Optional[int] = stat.S_IMODE(path.stat().st_mode)
+        mode: int | None = stat.S_IMODE(path.stat().st_mode)
     except FileNotFoundError:
         mode = None
     with tempfile.NamedTemporaryFile(
@@ -627,8 +627,8 @@ def sort(ctx: typer.Context) -> None:
 @app.command()
 def update(
     ctx: typer.Context,
-    since: Optional[str] = typer.Option(None, '--since', help='Start date to filter videos by.'),
-    until: Optional[str] = typer.Option(None, '--until', help='End date to filter videos by.'),
+    since: str | None = typer.Option(None, '--since', help='Start date to filter videos by.'),
+    until: str | None = typer.Option(None, '--until', help='End date to filter videos by.'),
     auto_batch: bool = typer.Option(False, '--auto-batch', help='Auto-chunk inserts to stay within API quota.'),
 ) -> None:
     """Add recent videos to watch later playlist."""

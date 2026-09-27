@@ -1,7 +1,7 @@
 [project]
 name = "youtube-sort-playlist"
 version = "0.0.0"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "addict",
     "arrow",
@@ -30,7 +30,7 @@ dev = [
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "T10", "W"]
+select = ["E", "F", "I", "T10", "UP", "W"]
 
 [tool.ruff.format]
 quote-style = "preserve"
