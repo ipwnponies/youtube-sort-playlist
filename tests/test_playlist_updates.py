@@ -1,10 +1,9 @@
 import random
 import unittest
-from datetime import timedelta
 from unittest import mock
 
 import playlist_updates
-from playlist_updates import VideoInfo, YoutubeManager, plan_moves
+from playlist_updates import YoutubeManager, plan_moves
 
 
 def manager_with_fake_api(dry_run=False):
@@ -21,8 +20,17 @@ def fake_pages(resource, *pages):
     resource.list_next.side_effect = requests[1:] + [None]
 
 
-def playlist_item(item_id, video_id):
-    return {'id': item_id, 'snippet': {'title': video_id, 'resourceId': {'videoId': video_id}}}
+def playlist_item(item_id, video_id, channel_id=None, published_at=None):
+    """A playlistItems.list entry. Omit channel_id/published_at to model a deleted or private video."""
+    item = {
+        'id': item_id,
+        'snippet': {'title': video_id, 'resourceId': {'videoId': video_id}},
+        'contentDetails': {'videoId': video_id},
+    }
+    if channel_id is not None:
+        item['snippet']['videoOwnerChannelId'] = channel_id
+        item['contentDetails']['videoPublishedAt'] = published_at
+    return item
 
 
 def apply_moves(current, moves):
@@ -99,26 +107,25 @@ class PlanMovesTest(unittest.TestCase):
 class SortPlaylistTest(unittest.TestCase):
     def test_only_out_of_place_items_are_updated(self):
         manager, youtube = manager_with_fake_api()
-        items = [playlist_item('p1', 'v1'), playlist_item('p2', 'v2'), playlist_item('p3', 'v3')]
-        infos = {
-            'v1': VideoInfo('chanA', '2026-01-02', timedelta()),
-            'v2': VideoInfo('chanA', '2026-01-03', timedelta()),
-            'v3': VideoInfo('chanA', '2026-01-01', timedelta()),
-        }
+        items = [
+            playlist_item('p1', 'v1', 'chanA', '2026-01-02'),
+            playlist_item('p2', 'v2', 'chanA', '2026-01-03'),
+            playlist_item('p3', 'v3', 'chanA', '2026-01-01'),
+        ]
 
-        manager.sort_playlist(items, infos)
+        manager.sort_playlist(items)
 
         self.assertEqual(moves_sent(youtube), [('p3', 0)])
 
     def test_same_video_twice_is_handled_per_playlist_item(self):
         manager, youtube = manager_with_fake_api()
-        items = [playlist_item('p1', 'v2'), playlist_item('p2', 'v1'), playlist_item('p3', 'v2')]
-        infos = {
-            'v1': VideoInfo('chanA', '2026-01-01', timedelta()),
-            'v2': VideoInfo('chanA', '2026-01-02', timedelta()),
-        }
+        items = [
+            playlist_item('p1', 'v2', 'chanA', '2026-01-02'),
+            playlist_item('p2', 'v1', 'chanA', '2026-01-01'),
+            playlist_item('p3', 'v2', 'chanA', '2026-01-02'),
+        ]
 
-        manager.sort_playlist(items, infos)
+        manager.sort_playlist(items)
 
         moves = moves_sent(youtube)
         self.assertEqual(len(moves), 1)
@@ -126,15 +133,84 @@ class SortPlaylistTest(unittest.TestCase):
 
     def test_dry_run_does_not_update(self):
         manager, youtube = manager_with_fake_api(dry_run=True)
-        items = [playlist_item('p1', 'v1'), playlist_item('p2', 'v2')]
-        infos = {
-            'v1': VideoInfo('chanB', '2026-01-01', timedelta()),
-            'v2': VideoInfo('chanA', '2026-01-01', timedelta()),
-        }
+        items = [playlist_item('p1', 'v1', 'chanB', '2026-01-01'), playlist_item('p2', 'v2', 'chanA', '2026-01-01')]
 
-        manager.sort_playlist(items, infos)
+        manager.sort_playlist(items)
 
         youtube.playlistItems().update.assert_not_called()
+
+    def test_unavailable_entries_move_to_front_before_anything_else(self):
+        manager, youtube = manager_with_fake_api()
+        items = [
+            playlist_item('p1', 'v1', 'chanA', '2026-01-02'),
+            playlist_item('p2', 'v2', 'chanA', '2026-01-01'),
+            playlist_item('p3', 'v3', 'chanA', '2026-01-03'),
+            playlist_item('p4', 'deleted'),
+        ]
+
+        manager.sort_playlist(items)
+
+        moves = moves_sent(youtube)
+        self.assertEqual(moves, [('p4', 0), ('p1', 2)])
+        self.assertEqual(apply_moves(['p1', 'p2', 'p3', 'p4'], moves), ['p4', 'p2', 'p1', 'p3'])
+
+    def test_second_sort_makes_no_moves(self):
+        manager, youtube = manager_with_fake_api()
+        items = [
+            playlist_item('p4', 'deleted'),
+            playlist_item('p2', 'v2', 'chanA', '2026-01-01'),
+            playlist_item('p1', 'v1', 'chanA', '2026-01-02'),
+            playlist_item('p3', 'v3', 'chanA', '2026-01-03'),
+        ]
+
+        manager.sort_playlist(items)
+
+        youtube.playlistItems().update.assert_not_called()
+
+    def test_sort_key_needs_no_video_details(self):
+        manager, youtube = manager_with_fake_api()
+
+        manager.sort_playlist(
+            [playlist_item('p1', 'v1', 'chanB', '2026-01-01'), playlist_item('p2', 'v2', 'chanA', '2026-01-01')]
+        )
+
+        youtube.videos().list.assert_not_called()
+
+
+class SortCommandTest(unittest.TestCase):
+    def test_deleted_video_in_playlist_does_not_crash_sort(self):
+        manager, youtube = manager_with_fake_api()
+        fake_pages(youtube.playlists(), [{'id': 'wl', 'snippet': {'title': 'Sort Watch Later'}}])
+        fake_pages(
+            youtube.playlistItems(),
+            [
+                playlist_item('p1', 'v2', 'chanA', '2026-01-02'),
+                playlist_item('p2', 'deleted'),
+                playlist_item('p3', 'v1', 'chanA', '2026-01-01'),
+            ],
+        )
+        # videos.list has nothing for the deleted video.
+        youtube.videos().list.return_value.execute.return_value = {
+            'items': [
+                {
+                    'id': 'v1',
+                    'snippet': {'channelId': 'chanA', 'publishedAt': '2026-01-01'},
+                    'contentDetails': {'duration': 'PT1M'},
+                },
+                {
+                    'id': 'v2',
+                    'snippet': {'channelId': 'chanA', 'publishedAt': '2026-01-02'},
+                    'contentDetails': {'duration': 'PT1M'},
+                },
+            ]
+        }
+
+        manager.sort()
+
+        self.assertEqual(apply_moves(['p1', 'p2', 'p3'], moves_sent(youtube)), ['p2', 'p3', 'p1'])
+        youtube.playlistItems().list.assert_called_once_with(
+            part='snippet,contentDetails', playlistId='wl', maxResults=50
+        )
 
 
 class UpdateTestCase(unittest.TestCase):

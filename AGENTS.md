@@ -86,6 +86,11 @@ path constants / config functions so no real user file is touched.
   `playlistItems.update` costs 50 quota units; re-positioning every item
   exhausted the daily quota at ~200 videos. Moves are keyed by playlist item
   id, since the same video can appear twice.
+  The sort key comes from the playlist items (`snippet.videoOwnerChannelId`,
+  `contentDetails.videoPublishedAt`), not `videos.list`. Entries missing
+  either (deleted/private videos) are moved to the front, first, and never
+  deleted; removing them is manual. Setting positions requires the
+  playlist's ordering to be Manual (`manualSortRequired` otherwise).
 - `print` is rebound to `tqdm.write` at module level so plain `print()` calls
   don't corrupt progress bars — don't reassign or shadow this.
 - `'Sort Watch Later'` is a **regular user-created playlist**, distinct from
