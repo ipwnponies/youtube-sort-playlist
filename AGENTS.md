@@ -13,14 +13,15 @@ make lint       # ruff check . (no edits)
 make typecheck  # mypy playlist_updates.py
 make test       # stdlib unittest suite in tests/ (API mocked, no network)
 make check      # lint + typecheck + test, non-mutating
-make update     # venv, then: uv run playlist_updates.py update --auto-batch
-make sort       # venv, then: uv run playlist_updates.py sort
+make update     # uv run --locked playlist_updates.py update --auto-batch
+make sort       # uv run --locked playlist_updates.py sort
 make update-lock  # uv lock
 make clean      # rm -rf .venv venv
 ```
 
-`update` and `sort` both depend on `venv`, so every invocation re-syncs the env
-and re-runs `pre-commit install` first.
+`update` and `sort` run `uv run --locked`: uv syncs the env itself, and fails
+if `uv.lock` is stale (run `make update-lock` after editing dependencies).
+`make venv` is only needed once, for dev tools and the pre-commit hook.
 
 See README.md for the full set of direct `uv run playlist_updates.py ...`
 invocations (`--since`, `--until`, `--dry-run`, `subscriptions add/list/remove`).
