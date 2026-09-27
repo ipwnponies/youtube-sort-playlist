@@ -1,12 +1,12 @@
 #! /usr/bin/env python
 import asyncio
 import bisect
-import operator
 import os
 import sys
 import threading
 from collections import namedtuple
-from functools import cached_property, lru_cache, reduce
+from datetime import timedelta
+from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -22,7 +22,7 @@ import yaml
 from apiclient.discovery import build
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
-from isodate import parse_duration, strftime
+from isodate import parse_duration
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -143,6 +143,15 @@ def is_sortable(playlist_item: JsonType) -> bool:
         playlist_item['snippet'].get('videoOwnerChannelId')
         and playlist_item.get('contentDetails', {}).get('videoPublishedAt')
     )
+
+
+def humanize_duration(duration: timedelta) -> str:
+    """Human-readable duration, e.g. 'a day 6 hours and 5 minutes', using arrow's humanize.
+
+    arrow humanizes the distance between two instants, so the duration is laid out from a fixed base instant.
+    """
+    base = arrow.Arrow(2000, 1, 1)
+    return (base + duration).humanize(base, only_distance=True, granularity=['day', 'hour', 'minute'])
 
 
 class YoutubeManager:
@@ -548,9 +557,9 @@ class YoutubeManager:
 
     @staticmethod
     def print_duration(video_infos: JsonType) -> None:
-        total_duration = reduce(operator.add, [video.duration for video in video_infos.values()])
+        total_duration = sum((video.duration for video in video_infos.values()), timedelta())
         print('\n' * 2)
-        print(f"Total duration of playlist is {strftime(total_duration, '%H:%M')}")
+        print(f'Total duration of playlist is {humanize_duration(total_duration)}')
 
 
 @lru_cache(1)
