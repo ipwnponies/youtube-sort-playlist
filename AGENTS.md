@@ -109,7 +109,10 @@ path constants / config functions so no real user file is touched.
 - `read_config()` and `get_watchlater_playlist()` are both `@lru_cache(1)`:
   config is read from disk once per process and the in-memory dict is
   mutated in place thereafter (`write_config` doesn't invalidate the cache,
-  it doesn't need to — same dict object).
+  it doesn't need to — same dict object). `write_config` is atomic
+  (`NamedTemporaryFile` next to the target + `os.replace`); an existing file
+  keeps its permissions, a new one is created 0600; `read_config` never
+  creates the file.
   `get_watchlater_playlist` pages through all playlists (`playlists.list`
   defaults to 5 per page) and `sys.exit`s if none is titled `SORT_PLAYLIST_TITLE`.
 
