@@ -377,9 +377,125 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(stat.S_IMODE(self.config_file.stat().st_mode), 0o640)
 
+    def test_write_through_symlinked_config(self):
+        real_file = self.config_file.parent / 'real-config.yaml'
+        self.config_file.parent.mkdir(parents=True)
+        real_file.write_text(yaml.safe_dump({'auto_add': []}))
+        self.config_file.symlink_to(real_file)
+
+        playlist_updates.write_config({'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
+
+        self.assertTrue(self.config_file.is_symlink())
+        self.assertEqual(self.config_file.resolve(), real_file)
+        self.assertEqual(yaml.safe_load(real_file.read_text()), {'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
+
     def test_missing_config_reads_empty_without_creating_file(self):
         self.assertEqual(playlist_updates.read_config(), {})
         self.assertFalse(self.config_file.exists())
+
+
+class AuthPathsTest(unittest.TestCase):
+    def test_client_secrets_resolve_next_to_script_not_cwd(self):
+        script_dir = Path(playlist_updates.__file__).resolve().parent
+
+        self.assertEqual(playlist_updates.CLIENT_SECRETS_FILE, script_dir / 'client_secrets.json')
+
+
+class GetCredsTest(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root = Path(temp_dir.name)
+        self.token_file = root / 'config' / 'token.json'
+        self.legacy_token_file = root / 'app' / 'playlist_updates.py-oauth2.json'
+        self.client_secrets_file = root / 'app' / 'client_secrets.json'
+        self.client_secrets_file.parent.mkdir(parents=True)
+        self.client_secrets_file.write_text('{}')
+        for name, value in [
+            ('TOKEN_FILE', self.token_file),
+            ('LEGACY_TOKEN_FILE', self.legacy_token_file),
+            ('CLIENT_SECRETS_FILE', self.client_secrets_file),
+        ]:
+            patcher = mock.patch.object(playlist_updates, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        flow_patcher = mock.patch.object(playlist_updates.InstalledAppFlow, 'from_client_secrets_file')
+        self.flow = flow_patcher.start().return_value
+        self.addCleanup(flow_patcher.stop)
+        self.flow.run_local_server.return_value = self._credentials(valid=True)
+
+    @staticmethod
+    def _credentials(valid, refresh_token='refresh'):
+        return mock.Mock(valid=valid, expired=not valid, refresh_token=refresh_token, **{'to_json.return_value': '{}'})
+
+    def _cached(self, credentials):
+        self.token_file.parent.mkdir(parents=True, exist_ok=True)
+        self.token_file.write_text('{}')
+        patcher = mock.patch.object(playlist_updates.Credentials, 'from_authorized_user_file', return_value=credentials)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_valid_cached_token_skips_consent(self):
+        cached = self._credentials(valid=True)
+        self._cached(cached)
+
+        self.assertIs(YoutubeManager.get_creds(), cached)
+        self.flow.run_local_server.assert_not_called()
+
+    def test_expired_token_is_refreshed_and_saved(self):
+        cached = self._credentials(valid=False)
+        self._cached(cached)
+
+        self.assertIs(YoutubeManager.get_creds(), cached)
+        cached.refresh.assert_called_once()
+        self.flow.run_local_server.assert_not_called()
+
+    def test_revoked_refresh_token_falls_back_to_consent(self):
+        cached = self._credentials(valid=False)
+        cached.refresh.side_effect = playlist_updates.google.auth.exceptions.RefreshError('invalid_grant')
+        self._cached(cached)
+
+        YoutubeManager.get_creds()
+
+        self.flow.run_local_server.assert_called_once_with(port=8080)
+
+    def test_first_run_saves_owner_only_token_and_keeps_legacy_token(self):
+        self.legacy_token_file.write_text('{}')
+
+        with mock.patch.object(playlist_updates, 'print') as fake_print:
+            YoutubeManager.get_creds()
+
+        self.assertEqual(stat.S_IMODE(self.token_file.stat().st_mode), 0o600)
+        self.assertTrue(self.legacy_token_file.exists())
+        self.assertIn(str(self.legacy_token_file), ' '.join(str(c.args[0]) for c in fake_print.call_args_list))
+
+    def test_corrupt_token_file_falls_back_to_consent(self):
+        self.token_file.parent.mkdir(parents=True)
+        for contents in ['not json', '[]', '"x"']:
+            with self.subTest(contents=contents):
+                self.flow.run_local_server.reset_mock()
+                self.token_file.write_text(contents)
+
+                YoutubeManager.get_creds()
+
+                self.flow.run_local_server.assert_called_once_with(port=8080)
+
+    def test_refresh_forces_owner_only_even_if_token_file_was_more_permissive(self):
+        cached = self._credentials(valid=False)
+        self._cached(cached)
+        self.token_file.chmod(0o644)
+
+        YoutubeManager.get_creds()
+
+        self.assertEqual(stat.S_IMODE(self.token_file.stat().st_mode), 0o600)
+
+    def test_missing_client_secrets_exits_with_instructions(self):
+        self.client_secrets_file.unlink()
+
+        with self.assertRaises(SystemExit) as context:
+            YoutubeManager.get_creds()
+        self.assertIn(str(self.client_secrets_file), str(context.exception.code))
 
 
 class UpdateStaleAllowlistTest(UpdateTestCase):

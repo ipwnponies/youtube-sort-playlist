@@ -40,13 +40,17 @@ path constants / config functions so no real user file is touched.
   a `subscriptions` sub-app (`add`/`list`/`remove`).
 - Config/state: `$XDG_CACHE_HOME/youtube-sort-playlist/config.yaml`, holding
   `auto_add` (allowlisted channels) and `last_updated` (watermark timestamp).
-- Auth: `client_secrets.json` (OAuth app, project root, gitignored) +
-  `{argv[0]}-oauth2.json` (cached user token, gitignored).
+- Auth: `client_secrets.json` (OAuth app, next to the script via `APP_DIR`,
+  gitignored) + `$XDG_CONFIG_HOME/youtube-sort-playlist/token.json` (user token,
+  atomic write, always forced 0600 even if the file on disk was more
+  permissive), via google-auth / google-auth-oauthlib (`InstalledAppFlow`,
+  port 8080). A corrupt/hand-edited `token.json` falls back to consent
+  instead of crashing. `build(credentials=...)` per thread.
 - `docs/superpowers/{plans,specs}/` — design docs from past feature work
   (typer migration, subscriptions subcommand); check before large changes to
   see if a similar change was already scoped.
 - `opencode.jsonc` — opencode-specific agent permissions; requires approval
-  to read `*.env`, `*oauth2.json`, `client_secrets.json`. A second, separate
+  to read `*.env`, `*oauth2.json`, the token file, `client_secrets.json`. A second, separate
   agent-config file from this one, relevant to any agent (not just Claude
   Code) working in this repo.
 
@@ -119,8 +123,10 @@ path constants / config functions so no real user file is touched.
   mutated in place thereafter (`write_config` doesn't invalidate the cache,
   it doesn't need to — same dict object). `write_config` is atomic
   (`NamedTemporaryFile` next to the target + `os.replace`); an existing file
-  keeps its permissions, a new one is created 0600; `read_config` never
-  creates the file.
+  keeps its permissions, a new one is created 0600 (`save_token` opts into
+  forcing 0600 always, since it holds a refresh token); `read_config` never
+  creates the file. The write target is resolved first, so a symlinked
+  config/state/token file is written through the link.
   `get_watchlater_playlist` pages through all playlists (`playlists.list`
   defaults to 5 per page) and `sys.exit`s if none is titled `SORT_PLAYLIST_TITLE`.
 

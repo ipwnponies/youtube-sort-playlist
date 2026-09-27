@@ -11,6 +11,7 @@
       // Maybe even make these deny, if agent does not have direct need to read
       "*.env": "ask",
       "*oauth2.json": "ask",
+      "**/youtube-sort-playlist/token.json": "ask",
       "client_secrets.json": "ask",
     },
   },

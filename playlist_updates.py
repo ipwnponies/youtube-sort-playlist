@@ -6,21 +6,22 @@ import stat
 import sys
 import tempfile
 import threading
+from collections.abc import Callable
 from datetime import timedelta
 from functools import cached_property, lru_cache
 from itertools import batched
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import addict
 import arrow
+import google.auth.exceptions
+import google.auth.transport.requests
 import googleapiclient.errors
-import httplib2
-import oauth2client.client
-import oauth2client.file
-import oauth2client.tools
 import typer
 import yaml
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
@@ -29,35 +30,30 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 from tqdm import tqdm
-from xdg import xdg_cache_home
+from xdg import xdg_cache_home, xdg_config_home
 
 print = tqdm.write
 
 
-# The CLIENT_SECRETS_FILE variable specifies the name of a file that contains
-# the OAuth 2.0 information for this application, including its client_id and
-# client_secret. You can acquire an OAuth 2.0 client ID and client secret from
-# the {{ Google Cloud Console }} at
-# {{ https://cloud.google.com/console }}.
-# Please ensure that you have enabled the YouTube Data API for your project.
-# For more information about using OAuth2 to access the YouTube Data API, see:
-#   https://developers.google.com/youtube/v3/guides/authentication
-# For more information about the client_secrets.json file format, see:
-#   https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
-CLIENT_SECRETS_FILE = 'client_secrets.json'
+# Resolved next to this script, not the cwd, so the tool works wherever it's invoked from (cron, aliases).
+APP_DIR = Path(__file__).resolve().parent
 
-# This variable defines a message to display if the CLIENT_SECRETS_FILE is
-# missing.
-MISSING_CLIENT_SECRETS_MESSAGE = f"""
+# OAuth 2.0 client (client_id/client_secret) for a Google Cloud project with the YouTube Data API enabled. See:
+#   https://developers.google.com/youtube/v3/guides/authentication
+#   https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
+CLIENT_SECRETS_FILE = APP_DIR / 'client_secrets.json'
+
+# Token written by oauth2client (named after argv[0], normally 'playlist_updates.py'). No longer read; the user is
+# told to delete it.
+LEGACY_TOKEN_FILE = APP_DIR / 'playlist_updates.py-oauth2.json'
+
+MISSING_CLIENT_SECRETS_MESSAGE = """
 WARNING: Please configure OAuth 2.0
 
-To make this sample run you will need to populate the client_secrets.json file
-found at:
+Create an OAuth client for a project with the YouTube Data API enabled in the Google Cloud Console
+(https://console.cloud.google.com/apis/credentials) and save it as:
 
-   {os.path.abspath(os.path.join(os.path.dirname(__file__), CLIENT_SECRETS_FILE))}
-
-with information from the {{{{ Cloud Console }}}}
-{{{{ https://cloud.google.com/console }}}}
+   {path}
 
 For more information about the client_secrets.json file format, please visit:
 https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
@@ -66,9 +62,12 @@ https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
 APP_NAME = 'youtube-sort-playlist'
 CONFIG_FILE = xdg_cache_home() / APP_NAME / 'config.yaml'
 
-# This OAuth 2.0 access scope allows for full read/write access to the
-# authenticated user's account.
-YOUTUBE_READ_WRITE_SCOPE = 'https://www.googleapis.com/auth/youtube'
+# Holds a refresh token with full YouTube access: kept outside the repo checkout, owner-only.
+TOKEN_FILE = xdg_config_home() / APP_NAME / 'token.json'
+
+YOUTUBE_SCOPES = ['https://www.googleapis.com/auth/youtube']
+# oauth2client's default, so redirect URIs already registered on the OAuth client keep working.
+OAUTH_REDIRECT_PORT = 8080
 YOUTUBE_API_SERVICE_NAME = 'youtube'
 YOUTUBE_API_VERSION = 'v3'
 
@@ -170,23 +169,37 @@ class YoutubeManager:
         self._thread_local = threading.local()
 
     @staticmethod
-    def get_creds() -> oauth2client.client.Credentials:
-        """Authorize client with OAuth2."""
-        flow = oauth2client.client.flow_from_clientsecrets(
-            CLIENT_SECRETS_FILE, message=MISSING_CLIENT_SECRETS_MESSAGE, scope=YOUTUBE_READ_WRITE_SCOPE
-        )
+    def get_creds() -> Credentials:
+        """Load cached OAuth credentials, refreshing them or re-running browser consent as needed."""
+        credentials = None
+        if TOKEN_FILE.exists():
+            try:
+                credentials = Credentials.from_authorized_user_file(str(TOKEN_FILE), YOUTUBE_SCOPES)
+            except ValueError, AttributeError:
+                credentials = None  # Corrupt or hand-edited token file: ask for consent again.
+        if credentials is not None:
+            if credentials.valid:
+                return credentials
 
-        storage = oauth2client.file.Storage(f'{sys.argv[0]}-oauth2.json')
-        credentials = storage.get()
+            if credentials.expired and credentials.refresh_token:
+                try:
+                    credentials.refresh(google.auth.transport.requests.Request())
+                except google.auth.exceptions.RefreshError:
+                    credentials = None  # Revoked or expired refresh token: ask for consent again.
+            else:
+                credentials = None
 
-        if credentials is None or credentials.invalid:
-            flags = oauth2client.tools.argparser.parse_args([])
-            credentials = oauth2client.tools.run_flow(flow, storage, flags)
+        if credentials is None:
+            if not CLIENT_SECRETS_FILE.exists():
+                sys.exit(MISSING_CLIENT_SECRETS_MESSAGE.format(path=CLIENT_SECRETS_FILE))
+            flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS_FILE), YOUTUBE_SCOPES)
+            credentials = flow.run_local_server(port=OAUTH_REDIRECT_PORT)
 
+        save_token(credentials)
         return credentials
 
     @cached_property
-    def _credentials(self) -> oauth2client.client.Credentials:
+    def _credentials(self) -> Credentials:
         """Lazily-resolved OAuth credentials.
 
         Only commands that actually hit the YouTube API need these; local-file-only commands (e.g.
@@ -198,14 +211,12 @@ class YoutubeManager:
     def youtube(self):
         """Thread-local youtube data v3 object.
 
-        httplib2.Http is not thread-safe: it keeps a single per-host connection cache, so sharing one
-        instance across the threads used for concurrent channel fetches/inserts causes requests to
-        interleave on the same socket (hangs, or worse, native heap corruption). Each thread lazily
-        builds and keeps its own client.
+        build() creates its own authorized httplib2 client per call, which is not thread-safe, so each
+        thread builds and keeps its own service object.
         """
         if not hasattr(self._thread_local, 'youtube'):
             self._thread_local.youtube = build(
-                YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, http=self._credentials.authorize(httplib2.Http())
+                YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, credentials=self._credentials
             )
         return self._thread_local.youtube
 
@@ -579,29 +590,45 @@ def read_config() -> JsonType:
 
 
 def write_config(config: JsonType) -> None:
-    _write_yaml_atomically(CONFIG_FILE, config)
+    _write_atomically(
+        CONFIG_FILE, lambda file: yaml.safe_dump(config, stream=file, explicit_start=True, default_flow_style=False)
+    )
 
 
-def _write_yaml_atomically(path: Path, data: JsonType) -> None:
+def save_token(credentials: Credentials) -> None:
+    """Persist the token atomically, always owner-only (0600): it holds a full-scope refresh token."""
+    _write_atomically(TOKEN_FILE, lambda file: file.write(credentials.to_json()), force_owner_only=True)
+    if LEGACY_TOKEN_FILE.exists():
+        print(f'{LEGACY_TOKEN_FILE} (the old oauth2client token) is no longer used; delete it.')
+
+
+def _write_atomically(path: Path, write: Callable[[IO[str]], object], *, force_owner_only: bool = False) -> None:
     """Write via a temp file + rename, so an interrupted write never truncates `path`.
 
     `open(path, 'w')` empties the file the moment it opens; if the dump is then interrupted, the old contents are
     gone. Instead, write a temp file next to `path` (rename is only atomic within one filesystem) and rename it over
     `path` once complete. NamedTemporaryFile creates it 0600 with a unique name, so it is never readable by other
     users and cannot collide with another writer. An existing file's permissions are carried over (applied after
-    writing, before the rename) so user changes such as group read survive; a new file stays 0600. No fsync: power
-    loss mid-write is out of scope (deliberate).
+    writing, before the rename) so user changes such as group read survive; a new file stays 0600. Pass
+    `force_owner_only=True` for a secrets file (e.g. the OAuth token) to always end up 0600, even if the existing
+    file on disk was made more permissive. No fsync: power loss mid-write is out of scope (deliberate).
+
+    Resolves `path` first so a symlinked config/state/token file (e.g. managed by stow or chezmoi) is written
+    through the link instead of `os.replace` clobbering the link itself.
     """
+    path = path.resolve()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    try:
-        mode: int | None = stat.S_IMODE(path.stat().st_mode)
-    except FileNotFoundError:
-        mode = None
+    mode: int | None = 0o600 if force_owner_only else None
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            mode = None
     with tempfile.NamedTemporaryFile(
         'w', encoding='utf-8', dir=path.parent, prefix=f'.{path.name}.', delete=False
     ) as file:
         try:
-            yaml.safe_dump(data, stream=file, explicit_start=True, default_flow_style=False)
+            write(file)
             file.flush()  # surface disk-full errors here, so the temp file is cleaned up
             if mode is not None:
                 os.fchmod(file.fileno(), mode)
