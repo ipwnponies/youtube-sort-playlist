@@ -61,6 +61,10 @@ The app stores config at:
 
 It records allowed channels (`auto_add`) and `last_updated` timestamps.
 
+OAuth token: `$XDG_CONFIG_HOME/youtube-sort-playlist/token.json` (owner-only). The first run opens a
+browser for consent. Upgrading from the oauth2client version asks for consent once; the old
+`playlist_updates.py-oauth2.json` is no longer used and can be deleted.
+
 ## 🛠️ Development
 
 Run autofixes:
