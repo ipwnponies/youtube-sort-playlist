@@ -38,8 +38,12 @@ path constants / config functions so no real user file is touched.
 - `playlist_updates.py` — everything lives here: `YoutubeManager` (all YouTube
   Data API v3 calls + config I/O) and a Typer `app` with `sort`, `update`, and
   a `subscriptions` sub-app (`add`/`list`/`remove`).
-- Config/state: `$XDG_CACHE_HOME/youtube-sort-playlist/config.yaml`, holding
-  `auto_add` (allowlisted channels) and `last_updated` (watermark timestamp).
+- Config: `$XDG_CONFIG_HOME/youtube-sort-playlist/config.yaml` (`auto_add`
+  allowlist). State: `$XDG_STATE_HOME/youtube-sort-playlist/state.yaml`
+  (`last_updated` watermark). The old combined file in `$XDG_CACHE_HOME` is
+  migrated by the Typer callback (`migrate_legacy_config`) unless a new file
+  exists; it is never deleted (a warning prints every run while it exists).
+  Dry run never writes: reads fall back to the legacy file in memory.
 - Auth: `client_secrets.json` (OAuth app, next to the script via `APP_DIR`,
   gitignored) + `$XDG_CONFIG_HOME/youtube-sort-playlist/token.json` (user token,
   atomic write, always forced 0600 even if the file on disk was more
@@ -118,7 +122,7 @@ path constants / config functions so no real user file is touched.
   YouTube's built-in "Watch Later" — the code asserts this distinction, it
   does not attempt to touch the built-in one.
   `update` (dry run included) looks it up first and exits before fetching if missing.
-- `read_config()` and `get_watchlater_playlist()` are both `@lru_cache(1)`:
+- `read_config()` and `read_state()` are `@cache`, and `get_watchlater_playlist()` is `@lru_cache(1)`:
   config is read from disk once per process and the in-memory dict is
   mutated in place thereafter (`write_config` doesn't invalidate the cache,
   it doesn't need to — same dict object). `write_config` is atomic
@@ -129,6 +133,10 @@ path constants / config functions so no real user file is touched.
   config/state/token file is written through the link.
   `get_watchlater_playlist` pages through all playlists (`playlists.list`
   defaults to 5 per page) and `sys.exit`s if none is titled `SORT_PLAYLIST_TITLE`.
+- The Typer group callback (`main`) skips `migrate_legacy_config` when
+  `--help` is in argv: Click runs the group callback before parsing a
+  subcommand's own `--help`, so without this check `update --help` performed
+  the real (non-dry-run) migration as a side effect.
 
 ## Code style
 
