@@ -1,6 +1,7 @@
 import unittest
 from unittest import mock
 
+import playlist_updates
 from playlist_updates import YoutubeManager
 
 
@@ -37,6 +38,62 @@ class GetWatchlaterPlaylistTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as context:
             manager.get_watchlater_playlist()
         self.assertIn('Sort Watch Later', str(context.exception.code))
+
+
+class UpdateTestCase(unittest.TestCase):
+    """Base for update() tests: config I/O is patched, API-facing methods are fakes."""
+
+    dry_run = False
+
+    def setUp(self):
+        self.config = {'auto_add': [{'id': 'c1', 'name': 'Channel'}], 'last_updated': '2026-01-01T00:00:00+00:00'}
+        self.write_config = mock.Mock()
+        for name, value in [('read_config', mock.Mock(return_value=self.config)), ('write_config', self.write_config)]:
+            patcher = mock.patch.object(playlist_updates, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        self.manager, self.youtube = manager_with_fake_api(self.dry_run)
+        fake_pages(self.youtube.playlists(), [{'id': 'wl', 'snippet': {'title': 'Sort Watch Later'}}])
+        self.manager.get_subscribed_channels = mock.Mock(return_value=[{'id': 'c1', 'title': 'Channel'}])
+        self.manager.insert_videos_watch_later = mock.Mock()
+
+        self.fetched = []
+        self.fetch_args = None
+
+        async def fake_fetch(channels, uploaded_after, uploaded_until):
+            self.fetch_args = (uploaded_after, uploaded_until)
+            return list(self.fetched)
+
+        self.manager.fetch_all_channels_videos = fake_fetch
+
+
+class UpdateFailFastTest(UpdateTestCase):
+    def test_missing_playlist_exits_before_fetching_or_writing(self):
+        fake_pages(self.youtube.playlists(), [])
+
+        with self.assertRaises(SystemExit):
+            self.manager.update(None)
+
+        self.manager.get_subscribed_channels.assert_not_called()
+        self.write_config.assert_not_called()
+
+
+class UpdateDryRunTest(UpdateTestCase):
+    dry_run = True
+
+    def test_dry_run_also_exits_when_playlist_missing(self):
+        fake_pages(self.youtube.playlists(), [])
+
+        with self.assertRaises(SystemExit):
+            self.manager.update(None)
+
+        self.manager.get_subscribed_channels.assert_not_called()
+
+    def test_dry_run_with_playlist_writes_nothing(self):
+        self.manager.update(None)
+
+        self.write_config.assert_not_called()
 
 
 if __name__ == '__main__':

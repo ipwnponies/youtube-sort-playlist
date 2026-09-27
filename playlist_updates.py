@@ -385,6 +385,12 @@ class YoutubeManager:
         uploaded_until: Optional[arrow.Arrow] = None,
         auto_batch: bool = False,
     ) -> None:
+        # Inserts need the playlist; find out before spending quota on fetches or advancing the watermark. Dry runs
+        # check too, so they surface a missing playlist instead of reporting a run that would fail.
+        # This call also resolves `_credentials` on the main thread, before any `asyncio.to_thread` fan-out below:
+        # `cached_property` has no lock, so a concurrent first resolution could run the OAuth flow more than once.
+        self.get_watchlater_playlist()
+
         channels = self.get_subscribed_channels()
         config = read_config()
         auto_add = config.setdefault('auto_add', [])
