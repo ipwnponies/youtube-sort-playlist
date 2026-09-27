@@ -135,6 +135,14 @@ def plan_moves(current: List[str], target: List[str]) -> List[Tuple[str, int]]:
     return moves
 
 
+def is_sortable(playlist_item: JsonType) -> bool:
+    """Whether the entry carries its uploader channel and publish date (deleted/private videos may not)."""
+    return bool(
+        playlist_item['snippet'].get('videoOwnerChannelId')
+        and playlist_item.get('contentDetails', {}).get('videoPublishedAt')
+    )
+
+
 class YoutubeManager:
     def __init__(self, dry_run: bool) -> None:
         self.dry_run = dry_run
@@ -202,7 +210,9 @@ class YoutubeManager:
         """Returns list of playlistItems from Sort Watch Later playlist"""
         result: List[Dict] = []
 
-        request = self.youtube.playlistItems().list(part='snippet', playlistId=watchlater_id, maxResults=50)
+        request = self.youtube.playlistItems().list(
+            part='snippet,contentDetails', playlistId=watchlater_id, maxResults=50
+        )
 
         # Iterate through all results pages
         while request:
@@ -244,17 +254,28 @@ class YoutubeManager:
 
         return result
 
-    def sort_playlist(self, playlist_videos: List[Dict], video_infos: JsonType) -> None:
+    def sort_playlist(self, playlist_videos: List[JsonType]) -> None:
         """Sorts a playlist and groups videos by channel.
 
-        Only out-of-place items are updated: each playlistItems.update costs 50 quota units.
+        The sort key comes from the playlist items themselves (uploader channel, then publish date). Entries missing
+        either field, such as deleted or private videos, go to the front in their current order: visible for manual
+        cleanup, and moved before any live video, so an API refusal to move one stops the sort before anything else
+        is reordered. Only out-of-place items are updated, since each playlistItems.update costs 50 quota units.
         """
 
-        def sort_key(playlist_item):
-            """Groups together videos from the same channel, sorted by date in ascending order."""
-            video_id = playlist_item['snippet']['resourceId']['videoId']
-            channel_name, published_date, _ = video_infos[video_id]
-            return f'{channel_name}-{published_date}'
+        def sort_key(playlist_item: JsonType) -> Tuple[bool, str, str]:
+            """Unavailable entries first, then videos grouped by channel, sorted by date in ascending order."""
+            if not is_sortable(playlist_item):
+                return (False, '', '')
+            return (
+                True,
+                playlist_item['snippet']['videoOwnerChannelId'],
+                playlist_item['contentDetails']['videoPublishedAt'],
+            )
+
+        unavailable = sum(1 for i in playlist_videos if not is_sortable(i))
+        if unavailable:
+            print(f'{unavailable} unavailable (deleted/private) video(s) will be kept at the front of the playlist.')
 
         items_by_id = {i['id']: i for i in playlist_videos}
         target = [i['id'] for i in sorted(playlist_videos, key=sort_key)]
@@ -502,9 +523,9 @@ class YoutubeManager:
         playlist_videos = self.get_playlist_videos(watchlater_id)
 
         if playlist_videos:
-            video_infos = self.get_video_info(playlist_videos)
-            self.sort_playlist(playlist_videos, video_infos)
-            self.print_duration(video_infos)
+            self.sort_playlist(playlist_videos)
+            # videos.list is only needed for durations; unavailable videos are simply absent from the total.
+            self.print_duration(self.get_video_info(playlist_videos))
         else:
             sys.exit(
                 'Playlist is empty! '
