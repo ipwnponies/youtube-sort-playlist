@@ -1,3 +1,4 @@
+import io
 import random
 import stat
 import tempfile
@@ -8,6 +9,7 @@ from unittest import mock
 
 import arrow
 import yaml
+from rich.console import Console
 
 import playlist_updates
 from playlist_updates import YoutubeManager, plan_moves
@@ -378,6 +380,46 @@ class ConfigTest(unittest.TestCase):
     def test_missing_config_reads_empty_without_creating_file(self):
         self.assertEqual(playlist_updates.read_config(), {})
         self.assertFalse(self.config_file.exists())
+
+
+class UpdateStaleAllowlistTest(UpdateTestCase):
+    def test_warns_about_allowlisted_channels_no_longer_subscribed(self):
+        self.config['auto_add'].append({'id': 'c2', 'name': 'Gone Channel'})
+
+        with mock.patch.object(playlist_updates, 'print') as fake_print:
+            self.manager.update(None)
+
+        messages = ' '.join(str(call.args[0]) for call in fake_print.call_args_list)
+        self.assertIn('Gone Channel', messages)
+
+
+class ListSubscriptionsTest(unittest.TestCase):
+    def setUp(self):
+        config = {'auto_add': [{'id': 'c1', 'name': 'Kept Channel'}, {'id': 'c2', 'name': 'Gone Channel'}]}
+        patcher = mock.patch.object(playlist_updates, 'read_config', return_value=config)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.manager, _ = manager_with_fake_api()
+        self.manager.get_subscribed_channels = mock.Mock(return_value=[{'id': 'c1', 'title': 'Kept Channel'}])
+
+    def _render(self, **kwargs):
+        buffer = io.StringIO()
+        with mock.patch.object(playlist_updates, 'Console', return_value=Console(file=buffer, width=120)):
+            self.manager.list_subscriptions(**kwargs)
+        return buffer.getvalue()
+
+    def test_check_marks_channels_no_longer_subscribed(self):
+        output = self._render(check=True)
+
+        rows = {line.split()[1]: line for line in output.splitlines() if 'Channel' in line and '│' in line}
+        self.assertIn('yes', rows['Kept'])
+        self.assertIn('no', rows['Gone'])
+
+    def test_plain_list_stays_local(self):
+        output = self._render()
+
+        self.manager.get_subscribed_channels.assert_not_called()
+        self.assertNotIn('Subscribed', output)
 
 
 if __name__ == '__main__':

@@ -56,7 +56,9 @@ path constants / config functions so no real user file is touched.
   allowlist it still advances `last_updated` to (run start - 3 h) (it only skips
   fetch/insert, not the watermark write). `subscriptions add` must be run
   first (interactive fuzzy multi-select) — otherwise later-added channels
-  silently miss everything published before the empty run.
+  silently miss everything published before the empty run. Allowlisted
+  channels you've unsubscribed from are skipped with a warning (never
+  auto-removed).
 - **`--until` and `--auto-batch` are mutually exclusive** (raises
   `BadParameter`): `--until` sets a fixed cutoff, `--auto-batch` computes its
   own cutoff from the quota cap below.
@@ -66,8 +68,13 @@ path constants / config functions so no real user file is touched.
   threads causes hangs or heap corruption. Don't refactor this into a normal
   `cached_property`.
 - **OAuth is lazy** (`_credentials` is a `cached_property`, not eager in
-  `__init__`) so that `subscriptions list`/`remove` — local-file-only — never
-  trigger a browser OAuth flow.
+  `__init__`) so that `subscriptions list` (without `--check`) and `remove` —
+  local-file-only — never trigger a browser OAuth flow. `cached_property` has
+  no lock, so whatever resolves it first must run on the main thread before
+  any `asyncio.to_thread` fan-out — `update()` does this via
+  `get_watchlater_playlist()` before fetching. A future call site that
+  resolves credentials from inside a spawned thread could run the OAuth flow
+  more than once.
 - **Batch failures are all-or-nothing by design**, not a bug to "fix" with
   partial retry: `fetch_all_channels_videos` aborts the whole fetch on any
   channel error, and `insert_videos_watch_later` aborts the whole insert on
