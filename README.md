@@ -42,6 +42,7 @@ uv run playlist_updates.py update --since 2026-01-01
 uv run playlist_updates.py --dry-run update
 uv run playlist_updates.py subscriptions add
 uv run playlist_updates.py subscriptions list
+uv run playlist_updates.py subscriptions list --check
 uv run playlist_updates.py subscriptions remove
 uv run playlist_updates.py --dry-run sort
 ```
@@ -49,7 +50,7 @@ uv run playlist_updates.py --dry-run sort
 Notes:
 
 - `update` only pulls videos from channels already in the `subscriptions` allowlist
-- `subscriptions add`/`remove` manage that allowlist interactively (fuzzy multi-select); `subscriptions list` shows it
+- `subscriptions add`/`remove` manage that allowlist interactively (fuzzy multi-select); `subscriptions list` shows it (`--check` also marks channels you've unsubscribed from; this signs in)
 - `--dry-run` prints actions without mutating playlists or the allowlist
 
 ## 🗂️ Config and state

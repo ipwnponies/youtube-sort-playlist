@@ -158,6 +158,12 @@ def humanize_duration(duration: timedelta) -> str:
     return (base + duration).humanize(base, only_distance=True, granularity=['day', 'hour', 'minute'])
 
 
+def stale_channels(auto_add: list[dict[str, str]], subscribed: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Allowlisted channels that are not among the current subscriptions."""
+    subscribed_ids = {i['id'] for i in subscribed}
+    return [i for i in auto_add if i['id'] not in subscribed_ids]
+
+
 class YoutubeManager:
     def __init__(self, dry_run: bool) -> None:
         self.dry_run = dry_run
@@ -330,8 +336,12 @@ class YoutubeManager:
 
         print(f"Added {len(selected)} channel(s): {', '.join(channel['title'] for channel in selected)}")
 
-    def list_subscriptions(self) -> None:
-        """Print the channels currently allowed to auto-add videos."""
+    def list_subscriptions(self, check: bool = False) -> None:
+        """Print the channels currently allowed to auto-add videos.
+
+        With `check`, also fetch current subscriptions (signs in) and mark allowlisted channels no longer subscribed.
+        Without it, this stays local-file-only.
+        """
         config = read_config()
         auto_add = config.get('auto_add', [])
 
@@ -339,9 +349,13 @@ class YoutubeManager:
             print('No subscriptions.')
             return
 
-        table = Table('Name', 'Channel ID')
+        stale_ids = {i['id'] for i in stale_channels(auto_add, self.get_subscribed_channels())} if check else set()
+        table = Table('Name', 'Channel ID', *(['Subscribed'] if check else []))
         for channel in auto_add:
-            table.add_row(escape(channel['name']), escape(channel['id']))
+            row = [escape(channel['name']), escape(channel['id'])]
+            if check:
+                row.append('no' if channel['id'] in stale_ids else 'yes')
+            table.add_row(*row)
 
         Console().print(table)
 
@@ -497,9 +511,16 @@ class YoutubeManager:
             print(f'Nothing to fetch before {uploaded_until}; last run already covered up to {uploaded_after}.')
             return
 
+        stale = stale_channels(auto_add, channels)
+        if stale:
+            print(
+                f"Skipping {len(stale)} allowlisted channel(s) you're no longer subscribed to: "
+                f"{', '.join(i['name'] for i in stale)}. Run \"subscriptions remove\" to drop them."
+            )
+
         allowed_channel_ids = {i['id'] for i in auto_add}
         allowed_channels = [i for i in channels if i['id'] in allowed_channel_ids]
-        if not allowed_channels:
+        if not auto_add:
             print('No channels in the allowlist; run "subscriptions add" to add some.')
         all_videos = (
             asyncio.run(self.fetch_all_channels_videos(allowed_channels, uploaded_after, uploaded_until))
@@ -642,10 +663,13 @@ def subscriptions_add(ctx: typer.Context) -> None:
 
 
 @subscriptions_app.command('list')
-def subscriptions_list(ctx: typer.Context) -> None:
+def subscriptions_list(
+    ctx: typer.Context,
+    check: bool = typer.Option(False, '--check', help='Also mark channels you are no longer subscribed to (signs in).'),
+) -> None:
     """List channels currently allowed to auto-add videos."""
     youtube_manager = YoutubeManager(ctx.obj)
-    youtube_manager.list_subscriptions()
+    youtube_manager.list_subscriptions(check)
 
 
 @subscriptions_app.command('remove')
