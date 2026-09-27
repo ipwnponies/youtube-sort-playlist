@@ -2,6 +2,8 @@ import random
 import unittest
 from unittest import mock
 
+import arrow
+
 import playlist_updates
 from playlist_updates import YoutubeManager, plan_moves
 
@@ -267,6 +269,50 @@ class UpdateDryRunTest(UpdateTestCase):
         self.manager.update(None)
 
         self.write_config.assert_not_called()
+
+
+class UpdateWatermarkTest(UpdateTestCase):
+    def test_watermark_is_run_start_minus_delay(self):
+        run_start = arrow.get('2026-02-01T10:00:00+00:00')
+
+        with mock.patch.object(arrow, 'now', return_value=run_start):
+            self.manager.update(None)
+
+        held_back = run_start.shift(hours=-3)
+        self.assertEqual(self.fetch_args[1], held_back)
+        self.assertEqual(self.config['last_updated'], held_back.format())
+
+    def test_run_within_delay_fetches_nothing_and_keeps_watermark(self):
+        self.config['last_updated'] = '2026-02-01T09:00:00+00:00'
+
+        with mock.patch.object(arrow, 'now', return_value=arrow.get('2026-02-01T10:00:00+00:00')):
+            self.manager.update(None)
+
+        self.assertIsNone(self.fetch_args)
+        self.write_config.assert_not_called()
+        self.assertEqual(self.config['last_updated'], '2026-02-01T09:00:00+00:00')
+
+    def test_explicit_until_is_the_watermark_without_delay(self):
+        until = arrow.get('2026-01-15T00:00:00+00:00')
+
+        self.manager.update(None, until)
+
+        self.assertEqual(self.fetch_args[1], until)
+        self.assertEqual(self.config['last_updated'], until.format())
+
+    def test_auto_batch_caps_inserts_and_watermark(self):
+        base = arrow.get('2026-01-02T00:00:00+00:00')
+        self.fetched = [
+            {'id': f'v{i}', 'title': f'v{i}', 'published_at': base.shift(minutes=i).isoformat()}
+            for i in range(playlist_updates.MAX_INSERTS_PER_RUN + 5)
+        ]
+
+        self.manager.update(None, auto_batch=True)
+
+        inserted = self.manager.insert_videos_watch_later.call_args.args[0]
+        self.assertEqual(len(inserted), playlist_updates.MAX_INSERTS_PER_RUN)
+        cutoff = arrow.get(self.fetched[playlist_updates.MAX_INSERTS_PER_RUN]['published_at'])
+        self.assertEqual(self.config['last_updated'], cutoff.format())
 
 
 if __name__ == '__main__':

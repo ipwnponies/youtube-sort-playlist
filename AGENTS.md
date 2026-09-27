@@ -52,7 +52,7 @@ path constants / config functions so no real user file is touched.
 ## Gotchas
 
 - **`update` only touches allowlisted channels**, but even with an *empty*
-  allowlist it still advances `last_updated` to now (it only skips
+  allowlist it still advances `last_updated` to (run start - 3 h) (it only skips
   fetch/insert, not the watermark write). `subscriptions add` must be run
   first (interactive fuzzy multi-select) — otherwise later-added channels
   silently miss everything published before the empty run.
@@ -72,6 +72,15 @@ path constants / config functions so no real user file is touched.
   channel error, and `insert_videos_watch_later` aborts the whole insert on
   any hard failure. This guarantees `last_updated` is never advanced past
   videos the run never actually saw/inserted.
+- **Watermark lags 3 hours** (`PUBLISH_DELAY_HOURS`): `update` fetches only
+  up to `now - 3 h` and records that as `last_updated`, so videos published
+  mid-run or listed late by YouTube are picked up next run. A run within 3 h
+  of the last one fetches nothing and leaves `last_updated` unchanged; the
+  automatic (no `--since`/`--until`) path never moves it backwards, but an
+  explicit `--since` plus an older `--until` (a backfill) still overwrites it;
+  an older `--until` alone fetches nothing and leaves it unchanged.
+  Known gap: a video made public long after upload may carry an older date
+  and be missed; no documented field says when a video went public.
 - **Quota-aware batching**: `MAX_INSERTS_PER_RUN = 160` (80% of the 10k daily
   quota / 50 cost per insert). `update --auto-batch` caps a run there by
   setting `last_updated` to the `published_at` of the first video *not*
