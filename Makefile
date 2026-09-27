@@ -35,12 +35,12 @@ update-lock: ## Refresh the uv lockfile
 	uv lock
 
 .PHONY: update
-update: venv  ## Add new videos to Watch Later
-	uv run playlist_updates.py update --auto-batch
+update: ## Add new videos to Watch Later
+	uv run --locked playlist_updates.py update --auto-batch
 
 .PHONY: sort
-sort: venv  ## Sort videos in 'Sort Watch Later' playlist
-	uv run playlist_updates.py sort
+sort: ## Sort videos in 'Sort Watch Later' playlist
+	uv run --locked playlist_updates.py sort
 
 .PHONY: clean
 clean: ## Remove local virtualenv artifacts
