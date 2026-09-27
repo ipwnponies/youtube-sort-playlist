@@ -23,10 +23,12 @@ lint: ## Run lint checks without editing files
 typecheck: ## Run mypy against the application entrypoint
 	uv run mypy playlist_updates.py
 
+.PHONY: test
+test: ## Run unit tests
+	uv run python -m unittest discover -s tests -t .
+
 .PHONY: check
-check: ## Run non-mutating repository checks
-	uv run ruff check .
-	uv run mypy playlist_updates.py
+check: lint typecheck test ## Run non-mutating repository checks
 
 .PHONY: update-lock
 update-lock: ## Refresh the uv lockfile
@@ -39,10 +41,6 @@ update: venv  ## Add new videos to Watch Later
 .PHONY: sort
 sort: venv  ## Sort videos in 'Sort Watch Later' playlist
 	uv run playlist_updates.py sort
-
-.PHONY: test
-test: ## Run application tests when a test suite exists
-	@:
 
 .PHONY: clean
 clean: ## Remove local virtualenv artifacts
