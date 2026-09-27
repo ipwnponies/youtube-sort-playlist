@@ -121,7 +121,6 @@ path constants / config functions so no real user file is touched.
 - Ruff: line length 120, `quote-style = "preserve"` (don't normalize quotes
   in diffs), lint rules `E, F, I, T10, W`.
 - mypy: `ignore_missing_imports = true` (many deps here are untyped).
-- Python `>=3.11` per `pyproject.toml` (README says `~=3.9`; trust
-  `pyproject.toml` — that's what `uv` actually resolves against). Existing
+- Python `>=3.11` per `pyproject.toml`. Existing
   code still uses `typing.Dict/List/Optional` rather than builtin generics —
   match that in new code rather than mixing styles.
