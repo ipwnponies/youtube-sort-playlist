@@ -228,9 +228,16 @@ class UpdateTestCase(unittest.TestCase):
     dry_run = False
 
     def setUp(self):
-        self.config = {'auto_add': [{'id': 'c1', 'name': 'Channel'}], 'last_updated': '2026-01-01T00:00:00+00:00'}
+        self.config = {'auto_add': [{'id': 'c1', 'name': 'Channel'}]}
+        self.state = {'last_updated': '2026-01-01T00:00:00+00:00'}
         self.write_config = mock.Mock()
-        for name, value in [('read_config', mock.Mock(return_value=self.config)), ('write_config', self.write_config)]:
+        self.write_state = mock.Mock()
+        for name, value in [
+            ('read_config', mock.Mock(return_value=self.config)),
+            ('write_config', self.write_config),
+            ('read_state', mock.Mock(return_value=self.state)),
+            ('write_state', self.write_state),
+        ]:
             patcher = mock.patch.object(playlist_updates, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -259,6 +266,7 @@ class UpdateFailFastTest(UpdateTestCase):
 
         self.manager.get_subscribed_channels.assert_not_called()
         self.write_config.assert_not_called()
+        self.write_state.assert_not_called()
 
 
 class UpdateDryRunTest(UpdateTestCase):
@@ -276,6 +284,7 @@ class UpdateDryRunTest(UpdateTestCase):
         self.manager.update(None)
 
         self.write_config.assert_not_called()
+        self.write_state.assert_not_called()
 
 
 class UpdateWatermarkTest(UpdateTestCase):
@@ -287,17 +296,18 @@ class UpdateWatermarkTest(UpdateTestCase):
 
         held_back = run_start.shift(hours=-3)
         self.assertEqual(self.fetch_args[1], held_back)
-        self.assertEqual(self.config['last_updated'], held_back.format())
+        self.assertEqual(self.state['last_updated'], held_back.format())
 
     def test_run_within_delay_fetches_nothing_and_keeps_watermark(self):
-        self.config['last_updated'] = '2026-02-01T09:00:00+00:00'
+        self.state['last_updated'] = '2026-02-01T09:00:00+00:00'
 
         with mock.patch.object(arrow, 'now', return_value=arrow.get('2026-02-01T10:00:00+00:00')):
             self.manager.update(None)
 
         self.assertIsNone(self.fetch_args)
         self.write_config.assert_not_called()
-        self.assertEqual(self.config['last_updated'], '2026-02-01T09:00:00+00:00')
+        self.write_state.assert_not_called()
+        self.assertEqual(self.state['last_updated'], '2026-02-01T09:00:00+00:00')
 
     def test_explicit_until_is_the_watermark_without_delay(self):
         until = arrow.get('2026-01-15T00:00:00+00:00')
@@ -305,7 +315,7 @@ class UpdateWatermarkTest(UpdateTestCase):
         self.manager.update(None, until)
 
         self.assertEqual(self.fetch_args[1], until)
-        self.assertEqual(self.config['last_updated'], until.format())
+        self.assertEqual(self.state['last_updated'], until.format())
 
     def test_auto_batch_caps_inserts_and_watermark(self):
         base = arrow.get('2026-01-02T00:00:00+00:00')
@@ -319,7 +329,7 @@ class UpdateWatermarkTest(UpdateTestCase):
         inserted = self.manager.insert_videos_watch_later.call_args.args[0]
         self.assertEqual(len(inserted), playlist_updates.MAX_INSERTS_PER_RUN)
         cutoff = arrow.get(self.fetched[playlist_updates.MAX_INSERTS_PER_RUN]['published_at'])
-        self.assertEqual(self.config['last_updated'], cutoff.format())
+        self.assertEqual(self.state['last_updated'], cutoff.format())
 
 
 class PrintDurationTest(unittest.TestCase):
@@ -343,12 +353,31 @@ class ConfigTest(unittest.TestCase):
     def setUp(self):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
-        self.config_file = Path(temp_dir.name) / 'nested' / 'config.yaml'
-        patcher = mock.patch.object(playlist_updates, 'CONFIG_FILE', self.config_file)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        playlist_updates.read_config.cache_clear()
-        self.addCleanup(playlist_updates.read_config.cache_clear)
+        root = Path(temp_dir.name)
+        self.config_file = root / 'config' / 'config.yaml'
+        self.state_file = root / 'state' / 'state.yaml'
+        self.legacy_file = root / 'cache' / 'config.yaml'
+        for name, value in [
+            ('CONFIG_FILE', self.config_file),
+            ('STATE_FILE', self.state_file),
+            ('LEGACY_CONFIG_FILE', self.legacy_file),
+        ]:
+            patcher = mock.patch.object(playlist_updates, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for cached in (playlist_updates.read_config, playlist_updates.read_state):
+            cached.cache_clear()
+            self.addCleanup(cached.cache_clear)
+        print_patcher = mock.patch.object(playlist_updates, 'print')
+        self.print = print_patcher.start()
+        self.addCleanup(print_patcher.stop)
+
+    def _write_legacy(self, data):
+        self.legacy_file.parent.mkdir(parents=True)
+        self.legacy_file.write_text(yaml.safe_dump(data))
+
+    def _printed(self):
+        return ' '.join(str(call.args[0]) for call in self.print.call_args_list)
 
     def test_interrupted_write_keeps_previous_config(self):
         playlist_updates.write_config({'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
@@ -389,9 +418,55 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(self.config_file.resolve(), real_file)
         self.assertEqual(yaml.safe_load(real_file.read_text()), {'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
 
-    def test_missing_config_reads_empty_without_creating_file(self):
-        self.assertEqual(playlist_updates.read_config(), {})
+    LEGACY = {'auto_add': [{'id': 'c1', 'name': 'Channel'}], 'last_updated': '2026-01-01T00:00:00+00:00'}
+
+    def test_help_does_not_migrate_legacy_config(self):
+        self._write_legacy(self.LEGACY)
+
+        with mock.patch('sys.argv', ['playlist_updates.py', 'update', '--help']):
+            playlist_updates.main(ctx=mock.Mock(resilient_parsing=False), dry_run=False)
+
         self.assertFalse(self.config_file.exists())
+        self.assertFalse(self.state_file.exists())
+
+    def test_fresh_install_reads_empty_without_creating_files(self):
+        playlist_updates.migrate_legacy_config(dry_run=False)
+
+        self.assertEqual(playlist_updates.read_config(), {})
+        self.assertEqual(playlist_updates.read_state(), {})
+        self.assertFalse(self.config_file.exists())
+        self.assertFalse(self.state_file.exists())
+        self.print.assert_not_called()
+
+    def test_migration_splits_legacy_keeps_it_and_warns(self):
+        self._write_legacy(self.LEGACY)
+
+        playlist_updates.migrate_legacy_config(dry_run=False)
+
+        self.assertEqual(playlist_updates.read_config(), {'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
+        self.assertEqual(playlist_updates.read_state(), {'last_updated': '2026-01-01T00:00:00+00:00'})
+        self.assertTrue(self.legacy_file.exists())
+        self.assertIn('delete it', self._printed())
+
+    def test_dry_run_reads_legacy_without_writing(self):
+        self._write_legacy(self.LEGACY)
+
+        playlist_updates.migrate_legacy_config(dry_run=True)
+
+        self.assertEqual(playlist_updates.read_config(), {'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
+        self.assertEqual(playlist_updates.read_state(), {'last_updated': '2026-01-01T00:00:00+00:00'})
+        self.assertFalse(self.config_file.exists())
+        self.assertFalse(self.state_file.exists())
+
+    def test_after_migration_new_files_win_and_warning_repeats(self):
+        self._write_legacy({'auto_add': [{'id': 'old', 'name': 'Old'}]})
+        playlist_updates.write_config({'auto_add': [{'id': 'new', 'name': 'New'}]})
+
+        playlist_updates.migrate_legacy_config(dry_run=False)
+
+        self.assertEqual(playlist_updates.read_config(), {'auto_add': [{'id': 'new', 'name': 'New'}]})
+        self.assertTrue(self.legacy_file.exists())
+        self.assertIn('delete it', self._printed())
 
 
 class AuthPathsTest(unittest.TestCase):

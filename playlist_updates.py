@@ -8,7 +8,7 @@ import tempfile
 import threading
 from collections.abc import Callable
 from datetime import timedelta
-from functools import cached_property, lru_cache
+from functools import cache, cached_property, lru_cache
 from itertools import batched
 from pathlib import Path
 from typing import IO, Any
@@ -30,7 +30,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 from tqdm import tqdm
-from xdg import xdg_cache_home, xdg_config_home
+from xdg import xdg_cache_home, xdg_config_home, xdg_state_home
 
 print = tqdm.write
 
@@ -60,7 +60,11 @@ https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
 """
 
 APP_NAME = 'youtube-sort-playlist'
-CONFIG_FILE = xdg_cache_home() / APP_NAME / 'config.yaml'
+CONFIG_FILE = xdg_config_home() / APP_NAME / 'config.yaml'  # user settings: `auto_add` allowlist
+STATE_FILE = xdg_state_home() / APP_NAME / 'state.yaml'  # run state: `last_updated` watermark
+# Pre-split location. A cache dir may be wiped by cleaners at any time, so it is migrated out; the file itself is left
+# for the user to delete.
+LEGACY_CONFIG_FILE = xdg_cache_home() / APP_NAME / 'config.yaml'
 
 # Holds a refresh token with full YouTube access: kept outside the repo checkout, owner-only.
 TOKEN_FILE = xdg_config_home() / APP_NAME / 'token.json'
@@ -508,11 +512,12 @@ class YoutubeManager:
 
         channels = self.get_subscribed_channels()
         config = read_config()
-        auto_add = config.setdefault('auto_add', [])
+        state = read_state()
+        auto_add = config.get('auto_add', [])
 
         if uploaded_after is None:
-            if 'last_updated' in config:
-                uploaded_after = arrow.get(config['last_updated'])
+            if 'last_updated' in state:
+                uploaded_after = arrow.get(state['last_updated'])
             else:
                 uploaded_after = arrow.now().shift(weeks=-2)
 
@@ -554,8 +559,8 @@ class YoutubeManager:
             self.insert_videos_watch_later(all_videos)
 
         if not self.dry_run:
-            config['last_updated'] = effective_until.format()
-            write_config(config)
+            state['last_updated'] = effective_until.format()
+            write_state(state)
 
     def sort(self) -> None:
         """Sort the 'Sort Watch Later' playlist."""
@@ -580,18 +585,72 @@ class YoutubeManager:
         print(f'Total duration of playlist is {humanize_duration(total_duration)}')
 
 
-@lru_cache(1)
-def read_config() -> JsonType:
-    if not CONFIG_FILE.exists():
+def _read_yaml(path: Path) -> JsonType:
+    if not path.exists():
         return {}
 
-    with CONFIG_FILE.open('r', encoding='utf-8') as config:
-        return yaml.safe_load(config) or {}
+    with path.open('r', encoding='utf-8') as file:
+        return yaml.safe_load(file) or {}
+
+
+def _legacy_pending() -> bool:
+    """The legacy file exists and has not been migrated (neither new file exists yet)."""
+    return LEGACY_CONFIG_FILE.exists() and not CONFIG_FILE.exists() and not STATE_FILE.exists()
+
+
+def _split_legacy() -> tuple[JsonType, JsonType]:
+    legacy = _read_yaml(LEGACY_CONFIG_FILE)
+    config = {key: value for key, value in legacy.items() if key != 'last_updated'}
+    state = {'last_updated': legacy['last_updated']} if 'last_updated' in legacy else {}
+    return config, state
+
+
+def migrate_legacy_config(dry_run: bool) -> None:
+    """Split the pre-XDG cache config into config (allowlist) and state (watermark), once.
+
+    Skipped once either new file exists, so a half-migrated or hand-edited setup is never overwritten. The legacy file
+    is never deleted; while it exists, every run says it can be removed. In dry run nothing is written: read_config and
+    read_state read the legacy file in memory instead.
+    """
+    if not LEGACY_CONFIG_FILE.exists():
+        return
+
+    if _legacy_pending():
+        if dry_run:
+            print(f'(dry run) Would move {LEGACY_CONFIG_FILE} to {CONFIG_FILE} and {STATE_FILE}.')
+            return
+        config, state = _split_legacy()
+        write_config(config)  # always written, so the migration is recorded even for an empty allowlist
+        if state:
+            write_state(state)
+        print(f'Moved {LEGACY_CONFIG_FILE} to {CONFIG_FILE} and {STATE_FILE}.')
+
+    print(f'{LEGACY_CONFIG_FILE} is no longer used; delete it.')
+
+
+@cache
+def read_config() -> JsonType:
+    if _legacy_pending():  # only reachable in dry run, before migration
+        return _split_legacy()[0]
+    return _read_yaml(CONFIG_FILE)
+
+
+@cache
+def read_state() -> JsonType:
+    if _legacy_pending():
+        return _split_legacy()[1]
+    return _read_yaml(STATE_FILE)
 
 
 def write_config(config: JsonType) -> None:
     _write_atomically(
         CONFIG_FILE, lambda file: yaml.safe_dump(config, stream=file, explicit_start=True, default_flow_style=False)
+    )
+
+
+def write_state(state: JsonType) -> None:
+    _write_atomically(
+        STATE_FILE, lambda file: yaml.safe_dump(state, stream=file, explicit_start=True, default_flow_style=False)
     )
 
 
@@ -644,6 +703,10 @@ app = typer.Typer(help='Tool to manage Youtube Watch Later playlist. Because the
 @app.callback()
 def main(ctx: typer.Context, dry_run: bool = typer.Option(False, '--dry-run')) -> None:
     ctx.obj = dry_run
+    # A subcommand's own --help is an eager option handled while parsing it, after this callback already ran;
+    # ctx.resilient_parsing (a completion-only mode) doesn't cover it, so check argv directly.
+    if '--help' not in sys.argv[1:]:
+        migrate_legacy_config(dry_run)
 
 
 @app.command()

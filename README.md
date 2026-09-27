@@ -57,9 +57,11 @@ Notes:
 
 The app stores config at:
 
-- `$XDG_CACHE_HOME/youtube-sort-playlist/config.yaml`
+- Allowlist (`auto_add`): `$XDG_CONFIG_HOME/youtube-sort-playlist/config.yaml`
+- Watermark (`last_updated`): `$XDG_STATE_HOME/youtube-sort-playlist/state.yaml`
 
-It records allowed channels (`auto_add`) and `last_updated` timestamps.
+A config left at the old `$XDG_CACHE_HOME/youtube-sort-playlist/config.yaml` is copied to the new locations on the
+first real (non-dry) run; the old file is kept, and each run reminds you to delete it.
 
 OAuth token: `$XDG_CONFIG_HOME/youtube-sort-playlist/token.json` (owner-only). The first run opens a
 browser for consent. Upgrading from the oauth2client version asks for consent once; the old
