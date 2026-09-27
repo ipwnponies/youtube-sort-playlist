@@ -2,7 +2,9 @@
 import asyncio
 import bisect
 import os
+import stat
 import sys
+import tempfile
 import threading
 from collections import namedtuple
 from datetime import timedelta
@@ -27,7 +29,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 from tqdm import tqdm
-from xdg import XDG_CACHE_HOME
+from xdg import xdg_cache_home
 
 print = tqdm.write
 
@@ -60,6 +62,9 @@ with information from the {{ Cloud Console }}
 For more information about the client_secrets.json file format, please visit:
 https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
 """ % os.path.abspath(os.path.join(os.path.dirname(__file__), CLIENT_SECRETS_FILE))
+
+APP_NAME = 'youtube-sort-playlist'
+CONFIG_FILE = xdg_cache_home() / APP_NAME / 'config.yaml'
 
 # This OAuth 2.0 access scope allows for full read/write access to the
 # authenticated user's account.
@@ -564,19 +569,44 @@ class YoutubeManager:
 
 @lru_cache(1)
 def read_config() -> JsonType:
-    config_dir = Path(XDG_CACHE_HOME) / 'youtube-sort-playlist'
-    config_dir.mkdir(parents=True, exist_ok=True)
+    if not CONFIG_FILE.exists():
+        return {}
 
-    config_file = config_dir / 'config.yaml'
-    config_file.touch()
-
-    with config_file.open('r') as config:
+    with CONFIG_FILE.open('r', encoding='utf-8') as config:
         return yaml.safe_load(config) or {}
 
 
 def write_config(config: JsonType) -> None:
-    with open(os.path.join(XDG_CACHE_HOME, 'youtube-sort-playlist', 'config.yaml'), 'w', encoding='utf-8') as file:
-        yaml.safe_dump(config, stream=file, explicit_start=True, default_flow_style=False)
+    _write_yaml_atomically(CONFIG_FILE, config)
+
+
+def _write_yaml_atomically(path: Path, data: JsonType) -> None:
+    """Write via a temp file + rename, so an interrupted write never truncates `path`.
+
+    `open(path, 'w')` empties the file the moment it opens; if the dump is then interrupted, the old contents are
+    gone. Instead, write a temp file next to `path` (rename is only atomic within one filesystem) and rename it over
+    `path` once complete. NamedTemporaryFile creates it 0600 with a unique name, so it is never readable by other
+    users and cannot collide with another writer. An existing file's permissions are carried over (applied after
+    writing, before the rename) so user changes such as group read survive; a new file stays 0600. No fsync: power
+    loss mid-write is out of scope (deliberate).
+    """
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        mode: Optional[int] = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = None
+    with tempfile.NamedTemporaryFile(
+        'w', encoding='utf-8', dir=path.parent, prefix=f'.{path.name}.', delete=False
+    ) as file:
+        try:
+            yaml.safe_dump(data, stream=file, explicit_start=True, default_flow_style=False)
+            file.flush()  # surface disk-full errors here, so the temp file is cleaned up
+            if mode is not None:
+                os.fchmod(file.fileno(), mode)
+        except BaseException:
+            os.unlink(file.name)
+            raise
+    os.replace(file.name, path)
 
 
 app = typer.Typer(help='Tool to manage Youtube Watch Later playlist. Because they refuse to make it trivial.')

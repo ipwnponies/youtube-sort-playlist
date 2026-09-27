@@ -1,9 +1,13 @@
 import random
+import stat
+import tempfile
 import unittest
 from datetime import timedelta
+from pathlib import Path
 from unittest import mock
 
 import arrow
+import yaml
 
 import playlist_updates
 from playlist_updates import VideoInfo, YoutubeManager, plan_moves
@@ -336,6 +340,49 @@ class PrintDurationTest(unittest.TestCase):
         YoutubeManager.print_duration({})
 
         self.print.assert_called_with('Total duration of playlist is 0 days 0 hours and 0 minutes')
+
+
+class ConfigTest(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.config_file = Path(temp_dir.name) / 'nested' / 'config.yaml'
+        patcher = mock.patch.object(playlist_updates, 'CONFIG_FILE', self.config_file)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        playlist_updates.read_config.cache_clear()
+        self.addCleanup(playlist_updates.read_config.cache_clear)
+
+    def test_interrupted_write_keeps_previous_config(self):
+        playlist_updates.write_config({'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
+
+        def interrupted_dump(data, stream, **kwargs):
+            stream.write('---\nauto_')
+            raise KeyboardInterrupt
+
+        with mock.patch.object(yaml, 'safe_dump', side_effect=interrupted_dump):
+            with self.assertRaises(KeyboardInterrupt):
+                playlist_updates.write_config({'auto_add': []})
+
+        self.assertEqual(yaml.safe_load(self.config_file.read_text()), {'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
+        self.assertEqual(list(self.config_file.parent.iterdir()), [self.config_file])  # temp file cleaned up
+
+    def test_new_config_is_owner_only(self):
+        playlist_updates.write_config({'auto_add': []})
+
+        self.assertEqual(stat.S_IMODE(self.config_file.stat().st_mode), 0o600)
+
+    def test_rewrite_keeps_existing_permissions(self):
+        playlist_updates.write_config({'auto_add': []})
+        self.config_file.chmod(0o640)
+
+        playlist_updates.write_config({'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
+
+        self.assertEqual(stat.S_IMODE(self.config_file.stat().st_mode), 0o640)
+
+    def test_missing_config_reads_empty_without_creating_file(self):
+        self.assertEqual(playlist_updates.read_config(), {})
+        self.assertFalse(self.config_file.exists())
 
 
 if __name__ == '__main__':
