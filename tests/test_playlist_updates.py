@@ -1,8 +1,10 @@
+import random
 import unittest
+from datetime import timedelta
 from unittest import mock
 
 import playlist_updates
-from playlist_updates import YoutubeManager
+from playlist_updates import VideoInfo, YoutubeManager, plan_moves
 
 
 def manager_with_fake_api(dry_run=False):
@@ -17,6 +19,40 @@ def fake_pages(resource, *pages):
     requests = [mock.MagicMock(**{'execute.return_value': {'items': list(page)}}) for page in pages]
     resource.list.return_value = requests[0]
     resource.list_next.side_effect = requests[1:] + [None]
+
+
+def playlist_item(item_id, video_id):
+    return {'id': item_id, 'snippet': {'title': video_id, 'resourceId': {'videoId': video_id}}}
+
+
+def apply_moves(current, moves):
+    """Simulate playlistItems.update position semantics: take the item out, reinsert at the position."""
+    order = list(current)
+    for item_id, position in moves:
+        order.remove(item_id)
+        order.insert(position, item_id)
+    return order
+
+
+def lis_length(values):
+    """Deliberately naive O(n^2) DP, independent of the O(n log n) code under test, used as an oracle.
+
+    The minimum number of moves is len(values) minus this.
+    """
+    best = [1] * len(values)
+    for i in range(len(values)):
+        for j in range(i):
+            if values[j] < values[i]:
+                best[i] = max(best[i], best[j] + 1)
+    return max(best, default=0)
+
+
+def moves_sent(youtube):
+    """(item id, position) of every playlistItems.update call, in call order."""
+    return [
+        (call.kwargs['body']['id'], call.kwargs['body']['snippet']['position'])
+        for call in youtube.playlistItems().update.call_args_list
+    ]
 
 
 class GetWatchlaterPlaylistTest(unittest.TestCase):
@@ -38,6 +74,67 @@ class GetWatchlaterPlaylistTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as context:
             manager.get_watchlater_playlist()
         self.assertIn('Sort Watch Later', str(context.exception.code))
+
+
+class PlanMovesTest(unittest.TestCase):
+    def test_sorted_playlist_needs_no_moves(self):
+        self.assertEqual(plan_moves(['a', 'b', 'c'], ['a', 'b', 'c']), [])
+
+    def test_single_misplaced_item_moves_once(self):
+        self.assertEqual(plan_moves(['z', 'a', 'b', 'c'], ['a', 'b', 'c', 'z']), [('z', 3)])
+
+    def test_random_permutations_reach_target_in_fewest_moves(self):
+        rng = random.Random(0)
+        for size in range(0, 40):
+            target = [f'item{i}' for i in range(size)]
+            current = target[:]
+            rng.shuffle(current)
+
+            moves = plan_moves(current, target)
+
+            self.assertEqual(apply_moves(current, moves), target)
+            self.assertEqual(len(moves), size - lis_length([target.index(i) for i in current]))
+
+
+class SortPlaylistTest(unittest.TestCase):
+    def test_only_out_of_place_items_are_updated(self):
+        manager, youtube = manager_with_fake_api()
+        items = [playlist_item('p1', 'v1'), playlist_item('p2', 'v2'), playlist_item('p3', 'v3')]
+        infos = {
+            'v1': VideoInfo('chanA', '2026-01-02', timedelta()),
+            'v2': VideoInfo('chanA', '2026-01-03', timedelta()),
+            'v3': VideoInfo('chanA', '2026-01-01', timedelta()),
+        }
+
+        manager.sort_playlist(items, infos)
+
+        self.assertEqual(moves_sent(youtube), [('p3', 0)])
+
+    def test_same_video_twice_is_handled_per_playlist_item(self):
+        manager, youtube = manager_with_fake_api()
+        items = [playlist_item('p1', 'v2'), playlist_item('p2', 'v1'), playlist_item('p3', 'v2')]
+        infos = {
+            'v1': VideoInfo('chanA', '2026-01-01', timedelta()),
+            'v2': VideoInfo('chanA', '2026-01-02', timedelta()),
+        }
+
+        manager.sort_playlist(items, infos)
+
+        moves = moves_sent(youtube)
+        self.assertEqual(len(moves), 1)
+        self.assertEqual(apply_moves(['p1', 'p2', 'p3'], moves), ['p2', 'p1', 'p3'])
+
+    def test_dry_run_does_not_update(self):
+        manager, youtube = manager_with_fake_api(dry_run=True)
+        items = [playlist_item('p1', 'v1'), playlist_item('p2', 'v2')]
+        infos = {
+            'v1': VideoInfo('chanB', '2026-01-01', timedelta()),
+            'v2': VideoInfo('chanA', '2026-01-01', timedelta()),
+        }
+
+        manager.sort_playlist(items, infos)
+
+        youtube.playlistItems().update.assert_not_called()
 
 
 class UpdateTestCase(unittest.TestCase):

@@ -81,6 +81,11 @@ path constants / config functions so no real user file is touched.
   to the same playlist can trigger spurious 409s that look identical to a
   real duplicate, which the 409-skip handling can't tell apart. Insert order
   doesn't matter for correctness — `sort` sets final position separately.
+- **`sort` only moves out-of-place items** (`plan_moves`: keep a longest
+  increasing subsequence in place, move the rest). Each
+  `playlistItems.update` costs 50 quota units; re-positioning every item
+  exhausted the daily quota at ~200 videos. Moves are keyed by playlist item
+  id, since the same video can appear twice.
 - `print` is rebound to `tqdm.write` at module level so plain `print()` calls
   don't corrupt progress bars — don't reassign or shadow this.
 - `'Sort Watch Later'` is a **regular user-created playlist**, distinct from
