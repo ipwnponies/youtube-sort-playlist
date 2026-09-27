@@ -11,7 +11,7 @@
 
 ### 1) Prerequisites
 
-- Python `~=3.9`
+- Python `>=3.11`
 - [`uv`](https://docs.astral.sh/uv/)
 - A YouTube Data API OAuth app with a `client_secrets.json` file in the project root
 
@@ -68,7 +68,7 @@ Run autofixes:
 make fix
 ```
 
-Run checks:
+Run checks (ruff, mypy, unit tests):
 
 ```bash
 make check
