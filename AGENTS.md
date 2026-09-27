@@ -119,8 +119,7 @@ path constants / config functions so no real user file is touched.
 ## Code style
 
 - Ruff: line length 120, `quote-style = "preserve"` (don't normalize quotes
-  in diffs), lint rules `E, F, I, T10, W`.
+  in diffs), lint rules `E, F, I, T10, UP, W`.
 - mypy: `ignore_missing_imports = true` (many deps here are untyped).
-- Python `>=3.11` per `pyproject.toml`. Existing
-  code still uses `typing.Dict/List/Optional` rather than builtin generics —
-  match that in new code rather than mixing styles.
+- Python `>=3.14` per `pyproject.toml`. Use builtin generics and `X | None`
+  (ruff `UP` rules enforce this); no `typing.Dict/List/Optional`.

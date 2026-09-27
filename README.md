@@ -11,7 +11,7 @@
 
 ### 1) Prerequisites
 
-- Python `>=3.11`
+- Python `>=3.14` (uv installs it if missing)
 - [`uv`](https://docs.astral.sh/uv/)
 - A YouTube Data API OAuth app with a `client_secrets.json` file in the project root
 
