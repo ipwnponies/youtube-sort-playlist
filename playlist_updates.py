@@ -6,9 +6,9 @@ import stat
 import sys
 import tempfile
 import threading
-from collections import namedtuple
 from datetime import timedelta
 from functools import cached_property, lru_cache
+from itertools import batched
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,7 @@ import oauth2client.file
 import oauth2client.tools
 import typer
 import yaml
-from apiclient.discovery import build
+from googleapiclient.discovery import build
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
 from isodate import parse_duration
@@ -80,7 +80,6 @@ MAX_INSERTS_PER_RUN = int(DAILY_QUOTA * 0.8 / INSERT_COST)  # 160
 # Newest uploads are left for the next run: covers videos published mid-run and YouTube listing uploads late.
 PUBLISH_DELAY_HOURS = 3
 
-VideoInfo = namedtuple('VideoInfo', ['channel_id', 'published_date', 'duration'])
 JsonType = dict[str, Any]
 
 
@@ -240,33 +239,16 @@ class YoutubeManager:
             request = self.youtube.playlistItems().list_next(request, response)
         return result
 
-    def get_video_info(self, playlist_videos: list[JsonType]) -> dict[str, VideoInfo]:
-        """Returns a dict of VideoInfo for each video
-
-        The key is video id and the value is VideoInfo.
-        """
-        result = {}
+    def get_video_durations(self, playlist_videos: list[JsonType]) -> dict[str, timedelta]:
+        """Returns each video's duration, keyed by video id. Videos videos.list returns nothing for are absent."""
+        result: dict[str, timedelta] = {}
         videos = [i['snippet']['resourceId']['videoId'] for i in playlist_videos]
 
         # Partition videos due to max number of videos queryable with one api call
-        while videos:
-            to_query = videos[:50]
-            remaining = videos[50:]
-
-            response = (
-                self.youtube.videos()
-                .list(part='snippet,contentDetails', id=','.join(list(to_query)), maxResults=50)
-                .execute()
-            )
-
+        for to_query in batched(videos, 50):
+            response = self.youtube.videos().list(part='contentDetails', id=','.join(to_query), maxResults=50).execute()
             for i in response['items']:
-                video_id = i['id']
-                channel_id = i['snippet']['channelId']
-                published_date = i['snippet']['publishedAt']
-                duration = parse_duration(i['contentDetails']['duration'])
-                result[video_id] = VideoInfo(channel_id, published_date, duration)
-
-            videos = remaining
+                result[i['id']] = parse_duration(i['contentDetails']['duration'])
 
         return result
 
@@ -308,8 +290,7 @@ class YoutubeManager:
 
     def get_subscribed_channels(self) -> list[dict[str, str]]:
         channels: list[dict[str, str]] = []
-        next_page_token = None
-        request = self.youtube.subscriptions().list(part='snippet', mine=True, maxResults=50, pageToken=next_page_token)
+        request = self.youtube.subscriptions().list(part='snippet', mine=True, maxResults=50)
 
         while request:
             response = request.execute()
@@ -451,8 +432,8 @@ class YoutubeManager:
 
         return all_videos
 
-    def add_video_to_watch_later(self, video_id: JsonType) -> None:
-        print(f"Adding video to playlist: {video_id['title']}")
+    def add_video_to_watch_later(self, video: JsonType) -> None:
+        print(f"Adding video to playlist: {video['title']}")
         if not self.dry_run:
             try:
                 self.youtube.playlistItems().insert(
@@ -460,7 +441,7 @@ class YoutubeManager:
                     body={
                         'snippet': {
                             'playlistId': self.get_watchlater_playlist(),
-                            'resourceId': {'kind': 'youtube#video', 'videoId': video_id['id']},
+                            'resourceId': {'kind': 'youtube#video', 'videoId': video['id']},
                         }
                     },
                 ).execute()
@@ -552,7 +533,7 @@ class YoutubeManager:
         if playlist_videos:
             self.sort_playlist(playlist_videos)
             # videos.list is only needed for durations; unavailable videos are simply absent from the total.
-            self.print_duration(self.get_video_info(playlist_videos))
+            self.print_duration(self.get_video_durations(playlist_videos))
         else:
             sys.exit(
                 'Playlist is empty! '
@@ -561,8 +542,8 @@ class YoutubeManager:
             )
 
     @staticmethod
-    def print_duration(video_infos: JsonType) -> None:
-        total_duration = sum((video.duration for video in video_infos.values()), timedelta())
+    def print_duration(durations: dict[str, timedelta]) -> None:
+        total_duration = sum(durations.values(), timedelta())
         print('\n' * 2)
         print(f'Total duration of playlist is {humanize_duration(total_duration)}')
 
