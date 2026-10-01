@@ -24,6 +24,7 @@ dev = [
     "mypy",
     "pre-commit",
     "pudb",
+    "pytest>=9.1.1",
     "ruff",
     "types-PyYAML",
 ]
@@ -36,6 +37,9 @@ select = ["E", "F", "I", "T10", "UP", "W"]
 
 [tool.ruff.format]
 quote-style = "preserve"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.mypy]
 ignore_missing_imports = true
