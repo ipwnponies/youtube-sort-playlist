@@ -25,7 +25,7 @@ typecheck: ## Run mypy against the application entrypoint
 
 .PHONY: test
 test: ## Run unit tests
-	uv run python -m unittest discover -s tests -t .
+	uv run pytest
 
 .PHONY: check
 check: lint typecheck test ## Run non-mutating repository checks

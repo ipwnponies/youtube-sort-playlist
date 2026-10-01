@@ -11,7 +11,7 @@ make venv       # uv sync (dev group, --no-install-project) + install pre-commit
 make fix        # pre-commit run --all-files (ruff check --fix, ruff format, hygiene hooks)
 make lint       # ruff check . (no edits)
 make typecheck  # mypy playlist_updates.py
-make test       # stdlib unittest suite in tests/ (API mocked, no network)
+make test       # pytest suite in tests/ (API mocked, no network)
 make check      # lint + typecheck + test, non-mutating
 make update     # uv run --locked playlist_updates.py update --auto-batch
 make sort       # uv run --locked playlist_updates.py sort
@@ -29,9 +29,9 @@ Note: `--dry-run` is a top-level option (defined on the Typer callback), so it
 must precede the subcommand: `playlist_updates.py --dry-run update`, not
 `update --dry-run`.
 
-Tests use stdlib `unittest` + `unittest.mock` (no pytest). They fake the API by
-setting `manager._thread_local.youtube` to a `MagicMock` and patch module-level
-path constants / config functions so no real user file is touched.
+Tests use pytest (fixtures, `parametrize`, `monkeypatch`, `tmp_path`) + `unittest.mock`.
+They fake the API by setting `manager._thread_local.youtube` to a `MagicMock` and
+patch module-level path constants / config functions so no real user file is touched.
 
 ## Architecture
 

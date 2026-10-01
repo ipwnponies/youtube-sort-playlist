@@ -1,21 +1,24 @@
 import io
 import random
 import stat
-import tempfile
-import unittest
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import arrow
+import pytest
 import yaml
 from rich.console import Console
 
 import playlist_updates
 from playlist_updates import YoutubeManager, plan_moves
 
+CHANNEL = {'id': 'c1', 'name': 'Channel'}
+LEGACY_CONFIG = {'auto_add': [CHANNEL], 'last_updated': '2026-01-01T00:00:00+00:00'}
 
-def manager_with_fake_api(dry_run=False):
+
+def make_manager(dry_run=False):
     """A manager whose YouTube client is a MagicMock, bypassing OAuth and the network."""
     manager = YoutubeManager(dry_run)
     manager._thread_local.youtube = mock.MagicMock()
@@ -72,546 +75,560 @@ def moves_sent(youtube):
     ]
 
 
-class GetWatchlaterPlaylistTest(unittest.TestCase):
-    def test_finds_playlist_beyond_first_page(self):
-        manager, youtube = manager_with_fake_api()
-        fake_pages(
-            youtube.playlists(),
-            [{'id': 'other', 'snippet': {'title': 'Other'}}],
-            [{'id': 'target', 'snippet': {'title': 'Sort Watch Later'}}],
-        )
-
-        self.assertEqual(manager.get_watchlater_playlist(), 'target')
-        youtube.playlists().list.assert_called_once_with(part='snippet', mine=True, maxResults=50)
-
-    def test_missing_playlist_exits_with_message(self):
-        manager, youtube = manager_with_fake_api()
-        fake_pages(youtube.playlists(), [{'id': 'other', 'snippet': {'title': 'Other'}}])
-
-        with self.assertRaises(SystemExit) as context:
-            manager.get_watchlater_playlist()
-        self.assertIn('Sort Watch Later', str(context.exception.code))
+def printed_text(fake_print):
+    return ' '.join(str(call.args[0]) for call in fake_print.call_args_list)
 
 
-class PlanMovesTest(unittest.TestCase):
-    def test_sorted_playlist_needs_no_moves(self):
-        self.assertEqual(plan_moves(['a', 'b', 'c'], ['a', 'b', 'c']), [])
-
-    def test_single_misplaced_item_moves_once(self):
-        self.assertEqual(plan_moves(['z', 'a', 'b', 'c'], ['a', 'b', 'c', 'z']), [('z', 3)])
-
-    def test_random_permutations_reach_target_in_fewest_moves(self):
-        rng = random.Random(0)
-        for size in range(0, 40):
-            target = [f'item{i}' for i in range(size)]
-            current = target[:]
-            rng.shuffle(current)
-
-            moves = plan_moves(current, target)
-
-            self.assertEqual(apply_moves(current, moves), target)
-            self.assertEqual(len(moves), size - lis_length([target.index(i) for i in current]))
+@pytest.fixture
+def api():
+    manager, youtube = make_manager()
+    return SimpleNamespace(manager=manager, youtube=youtube)
 
 
-class SortPlaylistTest(unittest.TestCase):
-    def test_only_out_of_place_items_are_updated(self):
-        manager, youtube = manager_with_fake_api()
-        items = [
-            playlist_item('p1', 'v1', 'chanA', '2026-01-02'),
-            playlist_item('p2', 'v2', 'chanA', '2026-01-03'),
-            playlist_item('p3', 'v3', 'chanA', '2026-01-01'),
-        ]
+@pytest.fixture
+def fake_print(monkeypatch):
+    fake = mock.Mock()
+    monkeypatch.setattr(playlist_updates, 'print', fake)
+    return fake
 
-        manager.sort_playlist(items)
 
-        self.assertEqual(moves_sent(youtube), [('p3', 0)])
+def build_update_env(monkeypatch, dry_run):
+    """Config I/O is patched, API-facing methods are fakes."""
+    env = SimpleNamespace(
+        config={'auto_add': [dict(CHANNEL)]},
+        state={'last_updated': '2026-01-01T00:00:00+00:00'},
+        write_config=mock.Mock(),
+        write_state=mock.Mock(),
+        fetched=[],
+        fetch_args=None,
+    )
+    monkeypatch.setattr(playlist_updates, 'read_config', mock.Mock(return_value=env.config))
+    monkeypatch.setattr(playlist_updates, 'write_config', env.write_config)
+    monkeypatch.setattr(playlist_updates, 'read_state', mock.Mock(return_value=env.state))
+    monkeypatch.setattr(playlist_updates, 'write_state', env.write_state)
 
-    def test_same_video_twice_is_handled_per_playlist_item(self):
-        manager, youtube = manager_with_fake_api()
-        items = [
+    env.manager, env.youtube = make_manager(dry_run)
+    fake_pages(env.youtube.playlists(), [{'id': 'wl', 'snippet': {'title': 'Sort Watch Later'}}])
+    env.manager.get_subscribed_channels = mock.Mock(return_value=[{'id': 'c1', 'title': 'Channel'}])
+    env.manager.insert_videos_watch_later = mock.Mock()
+
+    async def fake_fetch(channels, uploaded_after, uploaded_until):
+        env.fetch_args = (uploaded_after, uploaded_until)
+        return list(env.fetched)
+
+    env.manager.fetch_all_channels_videos = fake_fetch
+    return env
+
+
+@pytest.fixture
+def update_env(monkeypatch):
+    return build_update_env(monkeypatch, dry_run=False)
+
+
+@pytest.fixture
+def dry_update_env(monkeypatch):
+    return build_update_env(monkeypatch, dry_run=True)
+
+
+@pytest.fixture
+def config_env(tmp_path, monkeypatch, fake_print):
+    env = SimpleNamespace(
+        config_file=tmp_path / 'config' / 'config.yaml',
+        state_file=tmp_path / 'state' / 'state.yaml',
+        legacy_file=tmp_path / 'cache' / 'config.yaml',
+        print=fake_print,
+    )
+    monkeypatch.setattr(playlist_updates, 'CONFIG_FILE', env.config_file)
+    monkeypatch.setattr(playlist_updates, 'STATE_FILE', env.state_file)
+    monkeypatch.setattr(playlist_updates, 'LEGACY_CONFIG_FILE', env.legacy_file)
+    for cached in (playlist_updates.read_config, playlist_updates.read_state):
+        cached.cache_clear()
+    yield env
+    for cached in (playlist_updates.read_config, playlist_updates.read_state):
+        cached.cache_clear()
+
+
+@pytest.fixture
+def legacy_config(config_env):
+    config_env.legacy_file.parent.mkdir(parents=True)
+    config_env.legacy_file.write_text(yaml.safe_dump(LEGACY_CONFIG))
+    return config_env
+
+
+def test_finds_playlist_beyond_first_page(api):
+    fake_pages(
+        api.youtube.playlists(),
+        [{'id': 'other', 'snippet': {'title': 'Other'}}],
+        [{'id': 'target', 'snippet': {'title': 'Sort Watch Later'}}],
+    )
+
+    assert api.manager.get_watchlater_playlist() == 'target'
+    api.youtube.playlists().list.assert_called_once_with(part='snippet', mine=True, maxResults=50)
+
+
+def test_missing_playlist_exits_with_message(api):
+    fake_pages(api.youtube.playlists(), [{'id': 'other', 'snippet': {'title': 'Other'}}])
+
+    with pytest.raises(SystemExit) as excinfo:
+        api.manager.get_watchlater_playlist()
+    assert 'Sort Watch Later' in str(excinfo.value.code)
+
+
+def test_video_durations_are_queried_in_batches_of_50(api):
+    video_ids = [f'v{i}' for i in range(51)]
+    api.youtube.videos().list.return_value.execute.side_effect = lambda: {
+        'items': [{'id': 'v0', 'contentDetails': {'duration': 'PT1M'}}]
+    }
+
+    durations = api.manager.get_video_durations([playlist_item(f'p{i}', v) for i, v in enumerate(video_ids)])
+
+    queried = [call.kwargs['id'].split(',') for call in api.youtube.videos().list.call_args_list]
+    assert queried == [video_ids[:50], video_ids[50:]]
+    assert durations == {'v0': timedelta(minutes=1)}
+
+
+@pytest.mark.parametrize(
+    ('current', 'target', 'expected'),
+    [
+        pytest.param(['a', 'b', 'c'], ['a', 'b', 'c'], [], id='already-sorted'),
+        pytest.param(['z', 'a', 'b', 'c'], ['a', 'b', 'c', 'z'], [('z', 3)], id='single-misplaced-item'),
+    ],
+)
+def test_plan_moves(current, target, expected):
+    assert plan_moves(current, target) == expected
+
+
+@pytest.mark.parametrize('size', range(40))
+def test_random_permutations_reach_target_in_fewest_moves(size):
+    target = [f'item{i}' for i in range(size)]
+    current = target[:]
+    random.Random(size).shuffle(current)
+
+    moves = plan_moves(current, target)
+
+    assert apply_moves(current, moves) == target
+    assert len(moves) == size - lis_length([target.index(i) for i in current])
+
+
+def test_only_out_of_place_items_are_updated(api):
+    items = [
+        playlist_item('p1', 'v1', 'chanA', '2026-01-02'),
+        playlist_item('p2', 'v2', 'chanA', '2026-01-03'),
+        playlist_item('p3', 'v3', 'chanA', '2026-01-01'),
+    ]
+
+    api.manager.sort_playlist(items)
+
+    assert moves_sent(api.youtube) == [('p3', 0)]
+
+
+def test_same_video_twice_is_handled_per_playlist_item(api):
+    items = [
+        playlist_item('p1', 'v2', 'chanA', '2026-01-02'),
+        playlist_item('p2', 'v1', 'chanA', '2026-01-01'),
+        playlist_item('p3', 'v2', 'chanA', '2026-01-02'),
+    ]
+
+    api.manager.sort_playlist(items)
+
+    moves = moves_sent(api.youtube)
+    assert len(moves) == 1
+    assert apply_moves(['p1', 'p2', 'p3'], moves) == ['p2', 'p1', 'p3']
+
+
+def test_sort_dry_run_does_not_update():
+    manager, youtube = make_manager(dry_run=True)
+    items = [playlist_item('p1', 'v1', 'chanB', '2026-01-01'), playlist_item('p2', 'v2', 'chanA', '2026-01-01')]
+
+    manager.sort_playlist(items)
+
+    youtube.playlistItems().update.assert_not_called()
+
+
+def test_unavailable_entries_move_to_front_before_anything_else(api):
+    items = [
+        playlist_item('p1', 'v1', 'chanA', '2026-01-02'),
+        playlist_item('p2', 'v2', 'chanA', '2026-01-01'),
+        playlist_item('p3', 'v3', 'chanA', '2026-01-03'),
+        playlist_item('p4', 'deleted'),
+    ]
+
+    api.manager.sort_playlist(items)
+
+    moves = moves_sent(api.youtube)
+    assert moves == [('p4', 0), ('p1', 2)]
+    assert apply_moves(['p1', 'p2', 'p3', 'p4'], moves) == ['p4', 'p2', 'p1', 'p3']
+
+
+def test_second_sort_makes_no_moves(api):
+    items = [
+        playlist_item('p4', 'deleted'),
+        playlist_item('p2', 'v2', 'chanA', '2026-01-01'),
+        playlist_item('p1', 'v1', 'chanA', '2026-01-02'),
+        playlist_item('p3', 'v3', 'chanA', '2026-01-03'),
+    ]
+
+    api.manager.sort_playlist(items)
+
+    api.youtube.playlistItems().update.assert_not_called()
+
+
+def test_sort_key_needs_no_video_details(api):
+    api.manager.sort_playlist(
+        [playlist_item('p1', 'v1', 'chanB', '2026-01-01'), playlist_item('p2', 'v2', 'chanA', '2026-01-01')]
+    )
+
+    api.youtube.videos().list.assert_not_called()
+
+
+def test_deleted_video_in_playlist_does_not_crash_sort(api):
+    youtube = api.youtube
+    fake_pages(youtube.playlists(), [{'id': 'wl', 'snippet': {'title': 'Sort Watch Later'}}])
+    fake_pages(
+        youtube.playlistItems(),
+        [
             playlist_item('p1', 'v2', 'chanA', '2026-01-02'),
-            playlist_item('p2', 'v1', 'chanA', '2026-01-01'),
-            playlist_item('p3', 'v2', 'chanA', '2026-01-02'),
+            playlist_item('p2', 'deleted'),
+            playlist_item('p3', 'v1', 'chanA', '2026-01-01'),
+        ],
+    )
+    # videos.list has nothing for the deleted video.
+    youtube.videos().list.return_value.execute.return_value = {
+        'items': [
+            {
+                'id': 'v1',
+                'snippet': {'channelId': 'chanA', 'publishedAt': '2026-01-01'},
+                'contentDetails': {'duration': 'PT1M'},
+            },
+            {
+                'id': 'v2',
+                'snippet': {'channelId': 'chanA', 'publishedAt': '2026-01-02'},
+                'contentDetails': {'duration': 'PT1M'},
+            },
         ]
+    }
 
-        manager.sort_playlist(items)
-
-        moves = moves_sent(youtube)
-        self.assertEqual(len(moves), 1)
-        self.assertEqual(apply_moves(['p1', 'p2', 'p3'], moves), ['p2', 'p1', 'p3'])
-
-    def test_dry_run_does_not_update(self):
-        manager, youtube = manager_with_fake_api(dry_run=True)
-        items = [playlist_item('p1', 'v1', 'chanB', '2026-01-01'), playlist_item('p2', 'v2', 'chanA', '2026-01-01')]
-
-        manager.sort_playlist(items)
-
-        youtube.playlistItems().update.assert_not_called()
-
-    def test_unavailable_entries_move_to_front_before_anything_else(self):
-        manager, youtube = manager_with_fake_api()
-        items = [
-            playlist_item('p1', 'v1', 'chanA', '2026-01-02'),
-            playlist_item('p2', 'v2', 'chanA', '2026-01-01'),
-            playlist_item('p3', 'v3', 'chanA', '2026-01-03'),
-            playlist_item('p4', 'deleted'),
-        ]
-
-        manager.sort_playlist(items)
-
-        moves = moves_sent(youtube)
-        self.assertEqual(moves, [('p4', 0), ('p1', 2)])
-        self.assertEqual(apply_moves(['p1', 'p2', 'p3', 'p4'], moves), ['p4', 'p2', 'p1', 'p3'])
-
-    def test_second_sort_makes_no_moves(self):
-        manager, youtube = manager_with_fake_api()
-        items = [
-            playlist_item('p4', 'deleted'),
-            playlist_item('p2', 'v2', 'chanA', '2026-01-01'),
-            playlist_item('p1', 'v1', 'chanA', '2026-01-02'),
-            playlist_item('p3', 'v3', 'chanA', '2026-01-03'),
-        ]
-
-        manager.sort_playlist(items)
-
-        youtube.playlistItems().update.assert_not_called()
-
-    def test_sort_key_needs_no_video_details(self):
-        manager, youtube = manager_with_fake_api()
-
-        manager.sort_playlist(
-            [playlist_item('p1', 'v1', 'chanB', '2026-01-01'), playlist_item('p2', 'v2', 'chanA', '2026-01-01')]
-        )
-
-        youtube.videos().list.assert_not_called()
-
-
-class SortCommandTest(unittest.TestCase):
-    def test_deleted_video_in_playlist_does_not_crash_sort(self):
-        manager, youtube = manager_with_fake_api()
-        fake_pages(youtube.playlists(), [{'id': 'wl', 'snippet': {'title': 'Sort Watch Later'}}])
-        fake_pages(
-            youtube.playlistItems(),
-            [
-                playlist_item('p1', 'v2', 'chanA', '2026-01-02'),
-                playlist_item('p2', 'deleted'),
-                playlist_item('p3', 'v1', 'chanA', '2026-01-01'),
-            ],
-        )
-        # videos.list has nothing for the deleted video.
-        youtube.videos().list.return_value.execute.return_value = {
-            'items': [
-                {
-                    'id': 'v1',
-                    'snippet': {'channelId': 'chanA', 'publishedAt': '2026-01-01'},
-                    'contentDetails': {'duration': 'PT1M'},
-                },
-                {
-                    'id': 'v2',
-                    'snippet': {'channelId': 'chanA', 'publishedAt': '2026-01-02'},
-                    'contentDetails': {'duration': 'PT1M'},
-                },
-            ]
-        }
+    api.manager.sort()
 
-        manager.sort()
+    assert apply_moves(['p1', 'p2', 'p3'], moves_sent(youtube)) == ['p2', 'p3', 'p1']
+    youtube.playlistItems().list.assert_called_once_with(part='snippet,contentDetails', playlistId='wl', maxResults=50)
 
-        self.assertEqual(apply_moves(['p1', 'p2', 'p3'], moves_sent(youtube)), ['p2', 'p3', 'p1'])
-        youtube.playlistItems().list.assert_called_once_with(
-            part='snippet,contentDetails', playlistId='wl', maxResults=50
-        )
 
+def test_update_missing_playlist_exits_before_fetching_or_writing(update_env):
+    fake_pages(update_env.youtube.playlists(), [])
 
-class UpdateTestCase(unittest.TestCase):
-    """Base for update() tests: config I/O is patched, API-facing methods are fakes."""
+    with pytest.raises(SystemExit):
+        update_env.manager.update(None)
 
-    dry_run = False
+    update_env.manager.get_subscribed_channels.assert_not_called()
+    update_env.write_config.assert_not_called()
+    update_env.write_state.assert_not_called()
 
-    def setUp(self):
-        self.config = {'auto_add': [{'id': 'c1', 'name': 'Channel'}]}
-        self.state = {'last_updated': '2026-01-01T00:00:00+00:00'}
-        self.write_config = mock.Mock()
-        self.write_state = mock.Mock()
-        for name, value in [
-            ('read_config', mock.Mock(return_value=self.config)),
-            ('write_config', self.write_config),
-            ('read_state', mock.Mock(return_value=self.state)),
-            ('write_state', self.write_state),
-        ]:
-            patcher = mock.patch.object(playlist_updates, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
 
-        self.manager, self.youtube = manager_with_fake_api(self.dry_run)
-        fake_pages(self.youtube.playlists(), [{'id': 'wl', 'snippet': {'title': 'Sort Watch Later'}}])
-        self.manager.get_subscribed_channels = mock.Mock(return_value=[{'id': 'c1', 'title': 'Channel'}])
-        self.manager.insert_videos_watch_later = mock.Mock()
+def test_dry_run_also_exits_when_playlist_missing(dry_update_env):
+    fake_pages(dry_update_env.youtube.playlists(), [])
 
-        self.fetched = []
-        self.fetch_args = None
+    with pytest.raises(SystemExit):
+        dry_update_env.manager.update(None)
 
-        async def fake_fetch(channels, uploaded_after, uploaded_until):
-            self.fetch_args = (uploaded_after, uploaded_until)
-            return list(self.fetched)
+    dry_update_env.manager.get_subscribed_channels.assert_not_called()
 
-        self.manager.fetch_all_channels_videos = fake_fetch
 
+def test_dry_run_with_playlist_writes_nothing(dry_update_env):
+    dry_update_env.manager.update(None)
 
-class UpdateFailFastTest(UpdateTestCase):
-    def test_missing_playlist_exits_before_fetching_or_writing(self):
-        fake_pages(self.youtube.playlists(), [])
+    dry_update_env.write_config.assert_not_called()
+    dry_update_env.write_state.assert_not_called()
 
-        with self.assertRaises(SystemExit):
-            self.manager.update(None)
 
-        self.manager.get_subscribed_channels.assert_not_called()
-        self.write_config.assert_not_called()
-        self.write_state.assert_not_called()
+def test_watermark_is_run_start_minus_delay(update_env):
+    run_start = arrow.get('2026-02-01T10:00:00+00:00')
 
+    with mock.patch.object(arrow, 'now', return_value=run_start):
+        update_env.manager.update(None)
 
-class UpdateDryRunTest(UpdateTestCase):
-    dry_run = True
+    held_back = run_start.shift(hours=-3)
+    assert update_env.fetch_args[1] == held_back
+    assert update_env.state['last_updated'] == held_back.format()
 
-    def test_dry_run_also_exits_when_playlist_missing(self):
-        fake_pages(self.youtube.playlists(), [])
 
-        with self.assertRaises(SystemExit):
-            self.manager.update(None)
+def test_run_within_delay_fetches_nothing_and_keeps_watermark(update_env):
+    update_env.state['last_updated'] = '2026-02-01T09:00:00+00:00'
 
-        self.manager.get_subscribed_channels.assert_not_called()
+    with mock.patch.object(arrow, 'now', return_value=arrow.get('2026-02-01T10:00:00+00:00')):
+        update_env.manager.update(None)
 
-    def test_dry_run_with_playlist_writes_nothing(self):
-        self.manager.update(None)
+    assert update_env.fetch_args is None
+    update_env.write_config.assert_not_called()
+    update_env.write_state.assert_not_called()
+    assert update_env.state['last_updated'] == '2026-02-01T09:00:00+00:00'
 
-        self.write_config.assert_not_called()
-        self.write_state.assert_not_called()
 
+def test_explicit_until_is_the_watermark_without_delay(update_env):
+    until = arrow.get('2026-01-15T00:00:00+00:00')
 
-class UpdateWatermarkTest(UpdateTestCase):
-    def test_watermark_is_run_start_minus_delay(self):
-        run_start = arrow.get('2026-02-01T10:00:00+00:00')
+    update_env.manager.update(None, until)
 
-        with mock.patch.object(arrow, 'now', return_value=run_start):
-            self.manager.update(None)
+    assert update_env.fetch_args[1] == until
+    assert update_env.state['last_updated'] == until.format()
 
-        held_back = run_start.shift(hours=-3)
-        self.assertEqual(self.fetch_args[1], held_back)
-        self.assertEqual(self.state['last_updated'], held_back.format())
 
-    def test_run_within_delay_fetches_nothing_and_keeps_watermark(self):
-        self.state['last_updated'] = '2026-02-01T09:00:00+00:00'
+def test_auto_batch_caps_inserts_and_watermark(update_env):
+    base = arrow.get('2026-01-02T00:00:00+00:00')
+    update_env.fetched = [
+        {'id': f'v{i}', 'title': f'v{i}', 'published_at': base.shift(minutes=i).isoformat()}
+        for i in range(playlist_updates.MAX_INSERTS_PER_RUN + 5)
+    ]
 
-        with mock.patch.object(arrow, 'now', return_value=arrow.get('2026-02-01T10:00:00+00:00')):
-            self.manager.update(None)
+    update_env.manager.update(None, auto_batch=True)
 
-        self.assertIsNone(self.fetch_args)
-        self.write_config.assert_not_called()
-        self.write_state.assert_not_called()
-        self.assertEqual(self.state['last_updated'], '2026-02-01T09:00:00+00:00')
+    inserted = update_env.manager.insert_videos_watch_later.call_args.args[0]
+    assert len(inserted) == playlist_updates.MAX_INSERTS_PER_RUN
+    cutoff = arrow.get(update_env.fetched[playlist_updates.MAX_INSERTS_PER_RUN]['published_at'])
+    assert update_env.state['last_updated'] == cutoff.format()
 
-    def test_explicit_until_is_the_watermark_without_delay(self):
-        until = arrow.get('2026-01-15T00:00:00+00:00')
 
-        self.manager.update(None, until)
+def test_warns_about_allowlisted_channels_no_longer_subscribed(update_env, fake_print):
+    update_env.config['auto_add'].append({'id': 'c2', 'name': 'Gone Channel'})
 
-        self.assertEqual(self.fetch_args[1], until)
-        self.assertEqual(self.state['last_updated'], until.format())
+    update_env.manager.update(None)
 
-    def test_auto_batch_caps_inserts_and_watermark(self):
-        base = arrow.get('2026-01-02T00:00:00+00:00')
-        self.fetched = [
-            {'id': f'v{i}', 'title': f'v{i}', 'published_at': base.shift(minutes=i).isoformat()}
-            for i in range(playlist_updates.MAX_INSERTS_PER_RUN + 5)
-        ]
+    assert 'Gone Channel' in printed_text(fake_print)
 
-        self.manager.update(None, auto_batch=True)
 
-        inserted = self.manager.insert_videos_watch_later.call_args.args[0]
-        self.assertEqual(len(inserted), playlist_updates.MAX_INSERTS_PER_RUN)
-        cutoff = arrow.get(self.fetched[playlist_updates.MAX_INSERTS_PER_RUN]['published_at'])
-        self.assertEqual(self.state['last_updated'], cutoff.format())
+@pytest.mark.parametrize(
+    ('durations', 'expected'),
+    [
+        pytest.param(
+            {'v1': timedelta(hours=20), 'v2': timedelta(hours=10, minutes=5, seconds=59)},
+            'Total duration of playlist is a day 6 hours and 5 minutes',
+            id='over-a-day-keeps-the-days',
+        ),
+        pytest.param({}, 'Total duration of playlist is 0 days 0 hours and 0 minutes', id='no-videos-prints-zero'),
+    ],
+)
+def test_print_duration(fake_print, durations, expected):
+    YoutubeManager.print_duration(durations)
 
+    fake_print.assert_called_with(expected)
 
-class PrintDurationTest(unittest.TestCase):
-    def setUp(self):
-        patcher = mock.patch.object(playlist_updates, 'print')
-        self.print = patcher.start()
-        self.addCleanup(patcher.stop)
 
-    def test_total_over_a_day_keeps_the_days(self):
-        YoutubeManager.print_duration({'v1': timedelta(hours=20), 'v2': timedelta(hours=10, minutes=5, seconds=59)})
+def test_interrupted_write_keeps_previous_config(config_env):
+    playlist_updates.write_config({'auto_add': [CHANNEL]})
 
-        self.print.assert_called_with('Total duration of playlist is a day 6 hours and 5 minutes')
+    def interrupted_dump(data, stream, **kwargs):
+        stream.write('---\nauto_')
+        raise KeyboardInterrupt
 
-    def test_no_videos_prints_zero(self):
-        YoutubeManager.print_duration({})
+    with mock.patch.object(yaml, 'safe_dump', side_effect=interrupted_dump):
+        with pytest.raises(KeyboardInterrupt):
+            playlist_updates.write_config({'auto_add': []})
 
-        self.print.assert_called_with('Total duration of playlist is 0 days 0 hours and 0 minutes')
+    assert yaml.safe_load(config_env.config_file.read_text()) == {'auto_add': [CHANNEL]}
+    assert list(config_env.config_file.parent.iterdir()) == [config_env.config_file]  # temp file cleaned up
 
 
-class ConfigTest(unittest.TestCase):
-    def setUp(self):
-        temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(temp_dir.cleanup)
-        root = Path(temp_dir.name)
-        self.config_file = root / 'config' / 'config.yaml'
-        self.state_file = root / 'state' / 'state.yaml'
-        self.legacy_file = root / 'cache' / 'config.yaml'
-        for name, value in [
-            ('CONFIG_FILE', self.config_file),
-            ('STATE_FILE', self.state_file),
-            ('LEGACY_CONFIG_FILE', self.legacy_file),
-        ]:
-            patcher = mock.patch.object(playlist_updates, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        for cached in (playlist_updates.read_config, playlist_updates.read_state):
-            cached.cache_clear()
-            self.addCleanup(cached.cache_clear)
-        print_patcher = mock.patch.object(playlist_updates, 'print')
-        self.print = print_patcher.start()
-        self.addCleanup(print_patcher.stop)
+def test_new_config_is_owner_only(config_env):
+    playlist_updates.write_config({'auto_add': []})
 
-    def _write_legacy(self, data):
-        self.legacy_file.parent.mkdir(parents=True)
-        self.legacy_file.write_text(yaml.safe_dump(data))
+    assert stat.S_IMODE(config_env.config_file.stat().st_mode) == 0o600
 
-    def _printed(self):
-        return ' '.join(str(call.args[0]) for call in self.print.call_args_list)
 
-    def test_interrupted_write_keeps_previous_config(self):
-        playlist_updates.write_config({'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
+def test_rewrite_keeps_existing_permissions(config_env):
+    playlist_updates.write_config({'auto_add': []})
+    config_env.config_file.chmod(0o640)
 
-        def interrupted_dump(data, stream, **kwargs):
-            stream.write('---\nauto_')
-            raise KeyboardInterrupt
+    playlist_updates.write_config({'auto_add': [CHANNEL]})
 
-        with mock.patch.object(yaml, 'safe_dump', side_effect=interrupted_dump):
-            with self.assertRaises(KeyboardInterrupt):
-                playlist_updates.write_config({'auto_add': []})
+    assert stat.S_IMODE(config_env.config_file.stat().st_mode) == 0o640
 
-        self.assertEqual(yaml.safe_load(self.config_file.read_text()), {'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
-        self.assertEqual(list(self.config_file.parent.iterdir()), [self.config_file])  # temp file cleaned up
 
-    def test_new_config_is_owner_only(self):
-        playlist_updates.write_config({'auto_add': []})
+def test_write_through_symlinked_config(config_env):
+    real_file = config_env.config_file.parent / 'real-config.yaml'
+    config_env.config_file.parent.mkdir(parents=True)
+    real_file.write_text(yaml.safe_dump({'auto_add': []}))
+    config_env.config_file.symlink_to(real_file)
 
-        self.assertEqual(stat.S_IMODE(self.config_file.stat().st_mode), 0o600)
+    playlist_updates.write_config({'auto_add': [CHANNEL]})
 
-    def test_rewrite_keeps_existing_permissions(self):
-        playlist_updates.write_config({'auto_add': []})
-        self.config_file.chmod(0o640)
+    assert config_env.config_file.is_symlink()
+    assert config_env.config_file.resolve() == real_file
+    assert yaml.safe_load(real_file.read_text()) == {'auto_add': [CHANNEL]}
 
-        playlist_updates.write_config({'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
 
-        self.assertEqual(stat.S_IMODE(self.config_file.stat().st_mode), 0o640)
+def test_help_does_not_migrate_legacy_config(legacy_config):
+    with mock.patch('sys.argv', ['playlist_updates.py', 'update', '--help']):
+        playlist_updates.main(ctx=mock.Mock(resilient_parsing=False), dry_run=False)
 
-    def test_write_through_symlinked_config(self):
-        real_file = self.config_file.parent / 'real-config.yaml'
-        self.config_file.parent.mkdir(parents=True)
-        real_file.write_text(yaml.safe_dump({'auto_add': []}))
-        self.config_file.symlink_to(real_file)
+    assert not legacy_config.config_file.exists()
+    assert not legacy_config.state_file.exists()
 
-        playlist_updates.write_config({'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
 
-        self.assertTrue(self.config_file.is_symlink())
-        self.assertEqual(self.config_file.resolve(), real_file)
-        self.assertEqual(yaml.safe_load(real_file.read_text()), {'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
+def test_fresh_install_reads_empty_without_creating_files(config_env):
+    playlist_updates.migrate_legacy_config(dry_run=False)
 
-    LEGACY = {'auto_add': [{'id': 'c1', 'name': 'Channel'}], 'last_updated': '2026-01-01T00:00:00+00:00'}
+    assert playlist_updates.read_config() == {}
+    assert playlist_updates.read_state() == {}
+    assert not config_env.config_file.exists()
+    assert not config_env.state_file.exists()
+    config_env.print.assert_not_called()
 
-    def test_help_does_not_migrate_legacy_config(self):
-        self._write_legacy(self.LEGACY)
 
-        with mock.patch('sys.argv', ['playlist_updates.py', 'update', '--help']):
-            playlist_updates.main(ctx=mock.Mock(resilient_parsing=False), dry_run=False)
+def test_migration_splits_legacy_keeps_it_and_warns(legacy_config):
+    playlist_updates.migrate_legacy_config(dry_run=False)
 
-        self.assertFalse(self.config_file.exists())
-        self.assertFalse(self.state_file.exists())
+    assert playlist_updates.read_config() == {'auto_add': [CHANNEL]}
+    assert playlist_updates.read_state() == {'last_updated': '2026-01-01T00:00:00+00:00'}
+    assert legacy_config.legacy_file.exists()
+    assert 'delete it' in printed_text(legacy_config.print)
 
-    def test_fresh_install_reads_empty_without_creating_files(self):
-        playlist_updates.migrate_legacy_config(dry_run=False)
 
-        self.assertEqual(playlist_updates.read_config(), {})
-        self.assertEqual(playlist_updates.read_state(), {})
-        self.assertFalse(self.config_file.exists())
-        self.assertFalse(self.state_file.exists())
-        self.print.assert_not_called()
+def test_dry_run_reads_legacy_without_writing(legacy_config):
+    playlist_updates.migrate_legacy_config(dry_run=True)
 
-    def test_migration_splits_legacy_keeps_it_and_warns(self):
-        self._write_legacy(self.LEGACY)
+    assert playlist_updates.read_config() == {'auto_add': [CHANNEL]}
+    assert playlist_updates.read_state() == {'last_updated': '2026-01-01T00:00:00+00:00'}
+    assert not legacy_config.config_file.exists()
+    assert not legacy_config.state_file.exists()
 
-        playlist_updates.migrate_legacy_config(dry_run=False)
 
-        self.assertEqual(playlist_updates.read_config(), {'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
-        self.assertEqual(playlist_updates.read_state(), {'last_updated': '2026-01-01T00:00:00+00:00'})
-        self.assertTrue(self.legacy_file.exists())
-        self.assertIn('delete it', self._printed())
+def test_after_migration_new_files_win_and_warning_repeats(legacy_config):
+    playlist_updates.write_config({'auto_add': [{'id': 'new', 'name': 'New'}]})
 
-    def test_dry_run_reads_legacy_without_writing(self):
-        self._write_legacy(self.LEGACY)
+    playlist_updates.migrate_legacy_config(dry_run=False)
 
-        playlist_updates.migrate_legacy_config(dry_run=True)
+    assert playlist_updates.read_config() == {'auto_add': [{'id': 'new', 'name': 'New'}]}
+    assert legacy_config.legacy_file.exists()
+    assert 'delete it' in printed_text(legacy_config.print)
 
-        self.assertEqual(playlist_updates.read_config(), {'auto_add': [{'id': 'c1', 'name': 'Channel'}]})
-        self.assertEqual(playlist_updates.read_state(), {'last_updated': '2026-01-01T00:00:00+00:00'})
-        self.assertFalse(self.config_file.exists())
-        self.assertFalse(self.state_file.exists())
 
-    def test_after_migration_new_files_win_and_warning_repeats(self):
-        self._write_legacy({'auto_add': [{'id': 'old', 'name': 'Old'}]})
-        playlist_updates.write_config({'auto_add': [{'id': 'new', 'name': 'New'}]})
+def test_client_secrets_resolve_next_to_script_not_cwd():
+    script_dir = Path(playlist_updates.__file__).resolve().parent
 
-        playlist_updates.migrate_legacy_config(dry_run=False)
+    assert playlist_updates.CLIENT_SECRETS_FILE == script_dir / 'client_secrets.json'
 
-        self.assertEqual(playlist_updates.read_config(), {'auto_add': [{'id': 'new', 'name': 'New'}]})
-        self.assertTrue(self.legacy_file.exists())
-        self.assertIn('delete it', self._printed())
 
+def credentials(valid, refresh_token='refresh'):
+    return mock.Mock(valid=valid, expired=not valid, refresh_token=refresh_token, **{'to_json.return_value': '{}'})
 
-class AuthPathsTest(unittest.TestCase):
-    def test_client_secrets_resolve_next_to_script_not_cwd(self):
-        script_dir = Path(playlist_updates.__file__).resolve().parent
 
-        self.assertEqual(playlist_updates.CLIENT_SECRETS_FILE, script_dir / 'client_secrets.json')
+@pytest.fixture
+def creds_env(tmp_path, monkeypatch):
+    env = SimpleNamespace(
+        token_file=tmp_path / 'config' / 'token.json',
+        legacy_token_file=tmp_path / 'app' / 'playlist_updates.py-oauth2.json',
+        client_secrets_file=tmp_path / 'app' / 'client_secrets.json',
+    )
+    env.client_secrets_file.parent.mkdir(parents=True)
+    env.client_secrets_file.write_text('{}')
+    monkeypatch.setattr(playlist_updates, 'TOKEN_FILE', env.token_file)
+    monkeypatch.setattr(playlist_updates, 'LEGACY_TOKEN_FILE', env.legacy_token_file)
+    monkeypatch.setattr(playlist_updates, 'CLIENT_SECRETS_FILE', env.client_secrets_file)
 
+    from_secrets = mock.Mock()
+    monkeypatch.setattr(playlist_updates.InstalledAppFlow, 'from_client_secrets_file', from_secrets)
+    env.flow = from_secrets.return_value
+    env.flow.run_local_server.return_value = credentials(valid=True)
 
-class GetCredsTest(unittest.TestCase):
-    def setUp(self):
-        temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(temp_dir.cleanup)
-        root = Path(temp_dir.name)
-        self.token_file = root / 'config' / 'token.json'
-        self.legacy_token_file = root / 'app' / 'playlist_updates.py-oauth2.json'
-        self.client_secrets_file = root / 'app' / 'client_secrets.json'
-        self.client_secrets_file.parent.mkdir(parents=True)
-        self.client_secrets_file.write_text('{}')
-        for name, value in [
-            ('TOKEN_FILE', self.token_file),
-            ('LEGACY_TOKEN_FILE', self.legacy_token_file),
-            ('CLIENT_SECRETS_FILE', self.client_secrets_file),
-        ]:
-            patcher = mock.patch.object(playlist_updates, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+    def cache(cached):
+        env.token_file.parent.mkdir(parents=True, exist_ok=True)
+        env.token_file.write_text('{}')
+        monkeypatch.setattr(playlist_updates.Credentials, 'from_authorized_user_file', mock.Mock(return_value=cached))
 
-        flow_patcher = mock.patch.object(playlist_updates.InstalledAppFlow, 'from_client_secrets_file')
-        self.flow = flow_patcher.start().return_value
-        self.addCleanup(flow_patcher.stop)
-        self.flow.run_local_server.return_value = self._credentials(valid=True)
+    env.cache = cache
+    return env
 
-    @staticmethod
-    def _credentials(valid, refresh_token='refresh'):
-        return mock.Mock(valid=valid, expired=not valid, refresh_token=refresh_token, **{'to_json.return_value': '{}'})
 
-    def _cached(self, credentials):
-        self.token_file.parent.mkdir(parents=True, exist_ok=True)
-        self.token_file.write_text('{}')
-        patcher = mock.patch.object(playlist_updates.Credentials, 'from_authorized_user_file', return_value=credentials)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+def test_valid_cached_token_skips_consent(creds_env):
+    cached = credentials(valid=True)
+    creds_env.cache(cached)
 
-    def test_valid_cached_token_skips_consent(self):
-        cached = self._credentials(valid=True)
-        self._cached(cached)
+    assert YoutubeManager.get_creds() is cached
+    creds_env.flow.run_local_server.assert_not_called()
 
-        self.assertIs(YoutubeManager.get_creds(), cached)
-        self.flow.run_local_server.assert_not_called()
 
-    def test_expired_token_is_refreshed_and_saved(self):
-        cached = self._credentials(valid=False)
-        self._cached(cached)
+def test_expired_token_is_refreshed_and_saved(creds_env):
+    cached = credentials(valid=False)
+    creds_env.cache(cached)
 
-        self.assertIs(YoutubeManager.get_creds(), cached)
-        cached.refresh.assert_called_once()
-        self.flow.run_local_server.assert_not_called()
+    assert YoutubeManager.get_creds() is cached
+    cached.refresh.assert_called_once()
+    creds_env.flow.run_local_server.assert_not_called()
 
-    def test_revoked_refresh_token_falls_back_to_consent(self):
-        cached = self._credentials(valid=False)
-        cached.refresh.side_effect = playlist_updates.google.auth.exceptions.RefreshError('invalid_grant')
-        self._cached(cached)
 
+def test_revoked_refresh_token_falls_back_to_consent(creds_env):
+    cached = credentials(valid=False)
+    cached.refresh.side_effect = playlist_updates.google.auth.exceptions.RefreshError('invalid_grant')
+    creds_env.cache(cached)
+
+    YoutubeManager.get_creds()
+
+    creds_env.flow.run_local_server.assert_called_once_with(port=8080)
+
+
+def test_first_run_saves_owner_only_token_and_keeps_legacy_token(creds_env, fake_print):
+    creds_env.legacy_token_file.write_text('{}')
+
+    YoutubeManager.get_creds()
+
+    assert stat.S_IMODE(creds_env.token_file.stat().st_mode) == 0o600
+    assert creds_env.legacy_token_file.exists()
+    assert str(creds_env.legacy_token_file) in printed_text(fake_print)
+
+
+@pytest.mark.parametrize('contents', ['not json', '[]', '"x"'])
+def test_corrupt_token_file_falls_back_to_consent(creds_env, contents):
+    creds_env.token_file.parent.mkdir(parents=True)
+    creds_env.token_file.write_text(contents)
+
+    YoutubeManager.get_creds()
+
+    creds_env.flow.run_local_server.assert_called_once_with(port=8080)
+
+
+def test_refresh_forces_owner_only_even_if_token_file_was_more_permissive(creds_env):
+    creds_env.cache(credentials(valid=False))
+    creds_env.token_file.chmod(0o644)
+
+    YoutubeManager.get_creds()
+
+    assert stat.S_IMODE(creds_env.token_file.stat().st_mode) == 0o600
+
+
+def test_missing_client_secrets_exits_with_instructions(creds_env):
+    creds_env.client_secrets_file.unlink()
+
+    with pytest.raises(SystemExit) as excinfo:
         YoutubeManager.get_creds()
-
-        self.flow.run_local_server.assert_called_once_with(port=8080)
-
-    def test_first_run_saves_owner_only_token_and_keeps_legacy_token(self):
-        self.legacy_token_file.write_text('{}')
-
-        with mock.patch.object(playlist_updates, 'print') as fake_print:
-            YoutubeManager.get_creds()
-
-        self.assertEqual(stat.S_IMODE(self.token_file.stat().st_mode), 0o600)
-        self.assertTrue(self.legacy_token_file.exists())
-        self.assertIn(str(self.legacy_token_file), ' '.join(str(c.args[0]) for c in fake_print.call_args_list))
-
-    def test_corrupt_token_file_falls_back_to_consent(self):
-        self.token_file.parent.mkdir(parents=True)
-        for contents in ['not json', '[]', '"x"']:
-            with self.subTest(contents=contents):
-                self.flow.run_local_server.reset_mock()
-                self.token_file.write_text(contents)
-
-                YoutubeManager.get_creds()
-
-                self.flow.run_local_server.assert_called_once_with(port=8080)
-
-    def test_refresh_forces_owner_only_even_if_token_file_was_more_permissive(self):
-        cached = self._credentials(valid=False)
-        self._cached(cached)
-        self.token_file.chmod(0o644)
-
-        YoutubeManager.get_creds()
-
-        self.assertEqual(stat.S_IMODE(self.token_file.stat().st_mode), 0o600)
-
-    def test_missing_client_secrets_exits_with_instructions(self):
-        self.client_secrets_file.unlink()
-
-        with self.assertRaises(SystemExit) as context:
-            YoutubeManager.get_creds()
-        self.assertIn(str(self.client_secrets_file), str(context.exception.code))
+    assert str(creds_env.client_secrets_file) in str(excinfo.value.code)
 
 
-class UpdateStaleAllowlistTest(UpdateTestCase):
-    def test_warns_about_allowlisted_channels_no_longer_subscribed(self):
-        self.config['auto_add'].append({'id': 'c2', 'name': 'Gone Channel'})
+@pytest.fixture
+def subscriptions_env(monkeypatch):
+    config = {'auto_add': [{'id': 'c1', 'name': 'Kept Channel'}, {'id': 'c2', 'name': 'Gone Channel'}]}
+    monkeypatch.setattr(playlist_updates, 'read_config', mock.Mock(return_value=config))
+    manager, _ = make_manager()
+    manager.get_subscribed_channels = mock.Mock(return_value=[{'id': 'c1', 'title': 'Kept Channel'}])
 
-        with mock.patch.object(playlist_updates, 'print') as fake_print:
-            self.manager.update(None)
-
-        messages = ' '.join(str(call.args[0]) for call in fake_print.call_args_list)
-        self.assertIn('Gone Channel', messages)
-
-
-class ListSubscriptionsTest(unittest.TestCase):
-    def setUp(self):
-        config = {'auto_add': [{'id': 'c1', 'name': 'Kept Channel'}, {'id': 'c2', 'name': 'Gone Channel'}]}
-        patcher = mock.patch.object(playlist_updates, 'read_config', return_value=config)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        self.manager, _ = manager_with_fake_api()
-        self.manager.get_subscribed_channels = mock.Mock(return_value=[{'id': 'c1', 'title': 'Kept Channel'}])
-
-    def _render(self, **kwargs):
+    def render(**kwargs):
         buffer = io.StringIO()
         with mock.patch.object(playlist_updates, 'Console', return_value=Console(file=buffer, width=120)):
-            self.manager.list_subscriptions(**kwargs)
+            manager.list_subscriptions(**kwargs)
         return buffer.getvalue()
 
-    def test_check_marks_channels_no_longer_subscribed(self):
-        output = self._render(check=True)
-
-        rows = {line.split()[1]: line for line in output.splitlines() if 'Channel' in line and '│' in line}
-        self.assertIn('yes', rows['Kept'])
-        self.assertIn('no', rows['Gone'])
-
-    def test_plain_list_stays_local(self):
-        output = self._render()
-
-        self.manager.get_subscribed_channels.assert_not_called()
-        self.assertNotIn('Subscribed', output)
+    return SimpleNamespace(manager=manager, render=render)
 
 
-if __name__ == '__main__':
-    unittest.main()
+def test_check_marks_channels_no_longer_subscribed(subscriptions_env):
+    output = subscriptions_env.render(check=True)
+
+    rows = {line.split()[1]: line for line in output.splitlines() if 'Channel' in line and '│' in line}
+    assert 'yes' in rows['Kept']
+    assert 'no' in rows['Gone']
+
+
+def test_plain_list_stays_local(subscriptions_env):
+    output = subscriptions_env.render()
+
+    subscriptions_env.manager.get_subscribed_channels.assert_not_called()
+    assert 'Subscribed' not in output
